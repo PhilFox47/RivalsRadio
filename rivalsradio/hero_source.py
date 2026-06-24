@@ -27,6 +27,7 @@ from .recognizer import HeroRecognizer
 
 LogFn = Callable[[str], None]
 HeroFn = Callable[[str], None]
+FailFn = Callable[[], None]
 
 
 class HeroSource:
@@ -39,7 +40,8 @@ class HeroSource:
     def unavailable_reason(self) -> str:
         return ""
 
-    def start(self, on_hero: HeroFn, on_log: LogFn) -> None:
+    def start(self, on_hero: HeroFn, on_log: LogFn,
+              on_failed: Optional[FailFn] = None) -> None:
         raise NotImplementedError
 
     def stop(self) -> None:
@@ -67,7 +69,8 @@ class ScreenHeroSource(HeroSource):
             return "no heroes have calibrated references yet."
         return ""
 
-    def start(self, on_hero: HeroFn, on_log: LogFn) -> None:
+    def start(self, on_hero: HeroFn, on_log: LogFn,
+              on_failed: Optional[FailFn] = None) -> None:
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._run, args=(on_hero, on_log), name="screen-source", daemon=True)
@@ -147,10 +150,13 @@ class GepHeroSource(HeroSource):
                 "set its command in Settings, or keep the bridge/ folder next to "
                 "the app.")
 
-    def start(self, on_hero: HeroFn, on_log: LogFn) -> None:
+    def start(self, on_hero: HeroFn, on_log: LogFn,
+              on_failed: Optional[FailFn] = None) -> None:
         cmd = self._resolve_cmd()
         if not cmd:
             on_log("Cannot start GEP: " + self.unavailable_reason())
+            if on_failed:
+                on_failed()
             return
         self._stop.clear()
         try:
@@ -159,13 +165,17 @@ class GepHeroSource(HeroSource):
                 text=True, bufsize=1)
         except Exception as exc:
             on_log(f"Failed to launch GEP bridge: {exc}")
+            if on_failed:
+                on_failed()
             return
         on_log("Overwolf GEP bridge launched — waiting for hero data…")
         self._thread = threading.Thread(
-            target=self._read, args=(on_hero, on_log), name="gep-source", daemon=True)
+            target=self._read, args=(on_hero, on_log, on_failed),
+            name="gep-source", daemon=True)
         self._thread.start()
 
-    def _read(self, on_hero: HeroFn, on_log: LogFn) -> None:
+    def _read(self, on_hero: HeroFn, on_log: LogFn,
+              on_failed: Optional[FailFn] = None) -> None:
         assert self._proc and self._proc.stdout
         last: Optional[str] = None
         for line in self._proc.stdout:
@@ -187,6 +197,8 @@ class GepHeroSource(HeroSource):
                 on_log(f"[bridge] {msg.get('message', '')}")
         if not self._stop.is_set():
             on_log("GEP bridge exited.")
+            if on_failed:
+                on_failed()
 
     def stop(self) -> None:
         self._stop.set()

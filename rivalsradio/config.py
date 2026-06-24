@@ -95,8 +95,9 @@ class Config:
     setup_complete: bool = False
     game_window_title: str = "Marvel Rivals"
 
-    # Hero detection source: "screen" (screen capture) or "gep" (Overwolf bridge).
-    hero_source: str = "screen"
+    # Hero detection source: "auto" (prefer Overwolf GEP, fall back to screen),
+    # "gep" (Overwolf bridge only), or "screen" (screen capture only).
+    hero_source: str = "auto"
     # Command to launch the Overwolf GEP bridge (e.g. path to its .exe, or
     # "npm start --prefix bridge"). Blank = look for a bundled bridge.
     gep_bridge_cmd: str = ""

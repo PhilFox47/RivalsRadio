@@ -24,21 +24,29 @@ There's no public Marvel Rivals API that reports your live hero, so RivalsRadio
 
 ## Detection source: screen capture vs Overwolf GEP
 
-Hero detection is **pluggable** (Settings → *Hero detection source*):
+Hero detection is **pluggable** (Settings → *Hero detection source*). The
+default **`auto`** prefers the exact Overwolf GEP bridge and **falls back to
+screen capture** automatically if the bridge isn't installed — or if it stops
+working mid-session.
 
-| | `screen` (default) | `gep` (Overwolf bridge) |
+| Mode | Behaviour |
+|---|---|
+| **`auto`** (default) | Use the Overwolf GEP bridge if present; otherwise (or on bridge failure) use screen capture |
+| `gep` | Overwolf bridge only — exact, no screen capture |
+| `screen` | Screen capture only — no bridge needed |
+
+| | Overwolf GEP | Screen capture |
 |---|---|---|
-| Accuracy | Good (depends on calibration) | **Exact** — reads the real hero from the game's events |
-| Setup | Calibrate references per hero | Build the ow-electron bridge once (Node + Overwolf dev account) |
-| Dependencies | None extra | The bundled bridge (no separate Overwolf client) |
-| Screen capture | Yes | **No** |
+| Accuracy | **Exact** — the real hero from the game's events | Good (depends on calibration) |
+| Setup | Build the ow-electron bridge once (Node + Overwolf dev account) | Calibrate references per hero |
+| Screen capture | **No** | Yes |
 
-The **`gep`** source uses a small **standalone [ow-electron](bridge/README.md)
+The GEP source uses a small **standalone [ow-electron](bridge/README.md)
 bridge** — *white-label, no separate Overwolf client to run*. RivalsRadio
-launches it as a child process on Start and closes it on exit, and reads exact
-hero changes from it. Marvel Rivals (`24890`) is in Overwolf's supported-games
-list. See [`bridge/README.md`](bridge/README.md) to build it. Everything
-downstream (Spotify, Stage, OBS overlay) is identical for both sources.
+launches it as a child process on Start and closes it on exit. Marvel Rivals
+(`24890`) is in Overwolf's supported-games list. See
+[`bridge/README.md`](bridge/README.md) to build it. Everything downstream
+(Spotify, Stage, OBS overlay) is identical regardless of source.
 
 ## Requirements
 

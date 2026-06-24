@@ -208,8 +208,8 @@ class App:
         ttk.Label(df, text="Source").grid(row=0, column=0, sticky="w", padx=8, pady=4)
         self.source_var = tk.StringVar(value=self.cfg.hero_source)
         ttk.Combobox(df, textvariable=self.source_var, width=10, state="readonly",
-                     values=["screen", "gep"]).grid(row=0, column=1, sticky="w", padx=8)
-        ttk.Label(df, text="(screen = capture; gep = Overwolf bridge, exact)",
+                     values=["auto", "gep", "screen"]).grid(row=0, column=1, sticky="w", padx=8)
+        ttk.Label(df, text="(auto = Overwolf GEP, screen-capture fallback)",
                   foreground="#777").grid(row=0, column=2, sticky="w", padx=8)
         ttk.Label(df, text="GEP bridge command").grid(row=1, column=0, sticky="w", padx=8, pady=4)
         self.bridge_cmd_var = tk.StringVar(value=self.cfg.gep_bridge_cmd)
