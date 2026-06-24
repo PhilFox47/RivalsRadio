@@ -161,7 +161,7 @@ class Config:
             web_overlay_port=raw.get("web_overlay_port", 8770),
             setup_complete=raw.get("setup_complete", False),
             game_window_title=raw.get("game_window_title", "Marvel Rivals"),
-            hero_source=raw.get("hero_source", "screen"),
+            hero_source=raw.get("hero_source", "auto"),
             gep_bridge_cmd=raw.get("gep_bridge_cmd", ""),
         )
         cfg.ensure_default_heroes()

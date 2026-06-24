@@ -108,6 +108,15 @@ class App:
         ttk.Label(top, text="Spotify:", font=("Segoe UI", 10, "bold")).grid(row=2, column=0, sticky="w")
         ttk.Label(top, textvariable=self.spotify_var).grid(row=2, column=1, sticky="w", padx=8)
 
+        ttk.Label(top, text="Detection source:", font=("Segoe UI", 10, "bold")).grid(row=3, column=0, sticky="w", pady=(8, 0))
+        self.source_var = tk.StringVar(value=self.cfg.hero_source)
+        src_combo = ttk.Combobox(top, textvariable=self.source_var, width=10, state="readonly",
+                                 values=["auto", "gep", "screen"])
+        src_combo.grid(row=3, column=1, sticky="w", padx=8, pady=(8, 0))
+        src_combo.bind("<<ComboboxSelected>>", self._apply_source_change)
+        ttk.Label(top, text="auto = Overwolf GEP, falls back to screen capture",
+                  style="Muted.TLabel").grid(row=3, column=2, sticky="w", padx=4, pady=(8, 0))
+
         btns = ttk.Frame(tab)
         btns.pack(fill="x", padx=12, pady=4)
         self.start_btn = ttk.Button(btns, text="Start monitoring",
@@ -234,9 +243,11 @@ class App:
         df = ttk.LabelFrame(tab, text="Hero detection source")
         df.pack(fill="x", padx=12, pady=8)
         ttk.Label(df, text="Source").grid(row=0, column=0, sticky="w", padx=8, pady=4)
-        self.source_var = tk.StringVar(value=self.cfg.hero_source)
-        ttk.Combobox(df, textvariable=self.source_var, width=10, state="readonly",
-                     values=["auto", "gep", "screen"]).grid(row=0, column=1, sticky="w", padx=8)
+        # Shares self.source_var with the Status tab, so the two stay in sync.
+        settings_combo = ttk.Combobox(df, textvariable=self.source_var, width=10, state="readonly",
+                                      values=["auto", "gep", "screen"])
+        settings_combo.grid(row=0, column=1, sticky="w", padx=8)
+        settings_combo.bind("<<ComboboxSelected>>", self._apply_source_change)
         ttk.Label(df, text="auto = Overwolf GEP, screen-capture fallback",
                   style="Muted.TLabel").grid(row=0, column=2, sticky="w", padx=8)
         ttk.Label(df, text="GEP bridge command").grid(row=1, column=0, sticky="w", padx=8, pady=4)
@@ -349,6 +360,19 @@ class App:
             self._save_heroes(silent=True)
             self.monitor.start()
         self._refresh_status()
+
+    def _apply_source_change(self, _event=None) -> None:
+        """Persist the detection source immediately and apply it live."""
+        src = self.source_var.get()
+        if src == self.cfg.hero_source and not self.monitor.running:
+            return
+        self.cfg.hero_source = src
+        self.cfg.save()
+        self._append_log(f"Detection source set to '{src}'.")
+        if self.monitor.running:
+            self.monitor.stop()
+            self.monitor.start()
+            self._refresh_status()
 
     def _connect_spotify(self) -> None:
         self._save_settings(silent=True)
