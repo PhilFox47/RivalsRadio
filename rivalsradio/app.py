@@ -9,7 +9,7 @@ import time
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
-from . import theming
+from . import theming, gamewindow
 from .config import Config, HeroConfig
 from .capture import ScreenGrabber
 from .recognizer import save_reference
@@ -18,6 +18,10 @@ from .spotify_controller import SpotifyController
 from .monitor import Monitor
 from .audio_visualizer import AudioVisualizer
 from .stage import StageWindow
+from .stage_state import StageState
+from .nowplaying import NowPlaying
+from .web_overlay import WebOverlay
+from .wizard import SetupWizard
 
 ACCENT = "#1DB954"  # Spotify green
 
@@ -39,15 +43,27 @@ class App:
             on_hero=self._on_hero_detected,
         )
 
-        # Stage (second-screen) view + its audio source, created on demand.
+        # Stage (second-screen) view + its audio source + shared state.
         self.visualizer = AudioVisualizer()
+        self.state = StageState()
+        self.state.attach_visualizer(self.visualizer)
         self.stage: "StageWindow | None" = None
         self._accent_cache: dict = {}  # hero -> auto-extracted accent hex
+
+        # Now-playing poller (updates track info) and OBS web overlay.
+        self.nowplaying = NowPlaying(self.spotify, self.state, on_log=self._enqueue_log)
+        self.nowplaying.start()
+        self.web_overlay = WebOverlay(self.state, self.cfg.web_overlay_port)
 
         self._build_ui()
         self._refresh_status()
         self.root.after(150, self._drain_log_queue)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        if self.cfg.web_overlay_enabled:
+            self._toggle_web_overlay(initial=True)
+        if not self.cfg.setup_complete:
+            self.root.after(300, lambda: SetupWizard(self.root, self))
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self) -> None:
@@ -190,9 +206,28 @@ class App:
         cf = ttk.LabelFrame(tab, text="HUD capture region")
         cf.pack(fill="x", padx=12, pady=8)
         self.region_var = tk.StringVar()
-        ttk.Label(cf, textvariable=self.region_var).grid(row=0, column=0, columnspan=2, sticky="w", padx=8, pady=6)
-        ttk.Button(cf, text="Select region…", command=self._select_region).grid(row=0, column=2, padx=8)
-        ttk.Button(cf, text="Preview", command=self._preview_region).grid(row=0, column=3, padx=8)
+        ttk.Label(cf, textvariable=self.region_var).grid(row=0, column=0, columnspan=4, sticky="w", padx=8, pady=6)
+        ttk.Button(cf, text="Auto-detect game", command=self._auto_find_region).grid(row=1, column=0, padx=8, pady=(0, 6))
+        ttk.Button(cf, text="Select region…", command=self._select_region).grid(row=1, column=1, padx=8, pady=(0, 6))
+        ttk.Button(cf, text="Preview", command=self._preview_region).grid(row=1, column=2, padx=8, pady=(0, 6))
+
+        # Stage / presentation.
+        pf = ttk.LabelFrame(tab, text="Stage & overlay")
+        pf.pack(fill="x", padx=12, pady=8)
+        ttk.Label(pf, text="Visualizer style").grid(row=0, column=0, sticky="w", padx=8, pady=4)
+        self.style_var = tk.StringVar(value=self.cfg.stage_style)
+        ttk.Combobox(pf, textvariable=self.style_var, width=12, state="readonly",
+                     values=["bars", "mirror", "radial"]).grid(row=0, column=1, sticky="w", padx=8)
+        self.nowplaying_var = tk.BooleanVar(value=self.cfg.show_now_playing)
+        ttk.Checkbutton(pf, text="Show now-playing (track + album art)",
+                        variable=self.nowplaying_var).grid(row=1, column=0, columnspan=2, sticky="w", padx=8, pady=4)
+        ttk.Label(pf, text="OBS overlay port").grid(row=2, column=0, sticky="w", padx=8, pady=4)
+        self.web_port_var = tk.IntVar(value=self.cfg.web_overlay_port)
+        ttk.Entry(pf, textvariable=self.web_port_var, width=10).grid(row=2, column=1, sticky="w", padx=8)
+        self.web_btn = ttk.Button(
+            pf, text="Stop OBS overlay" if self.web_overlay.running else "Start OBS overlay",
+            command=self._toggle_web_overlay)
+        self.web_btn.grid(row=3, column=0, padx=8, pady=4, sticky="w")
 
         # Tuning.
         tf = ttk.LabelFrame(tab, text="Detection tuning")
@@ -330,24 +365,40 @@ class App:
             self.stage.top.deiconify()
             self.stage.top.lift()
             return
-        self.stage = StageWindow(self.root, self.visualizer)
+        self.stage = StageWindow(self.root, self.state, self.cfg, self.visualizer)
         if not self.visualizer.available:
             self._append_log(
                 "Stage opened. Audio visualizer backend unavailable "
                 "(install 'soundcard' on Windows for live audio bars).")
         else:
             self._append_log("Stage opened. Drag it to your second screen, F11 = fullscreen.")
-        # If we already know the current hero, show it immediately.
-        current = self.hero_var.get()
-        if current and current != "—":
-            self._update_stage(current)
 
     def _update_stage(self, hero: str) -> None:
-        if not (self.stage and self.stage.alive):
-            return
+        """Push the current hero/accent into shared state (Stage + web overlay)."""
         path = self.cfg.avatar_path(hero)
         accent = self._effective_accent(hero)
-        self.stage.set_hero(hero, path, accent, playlist_name="")
+        self.state.set_hero(hero, path, accent)
+
+    def _toggle_web_overlay(self, initial: bool = False) -> None:
+        if self.web_overlay.running and not initial:
+            self.web_overlay.stop()
+            self.cfg.web_overlay_enabled = False
+            self.cfg.save()
+            self._append_log("OBS web overlay stopped.")
+        else:
+            self.web_overlay.port = self.cfg.web_overlay_port
+            try:
+                self.web_overlay.start()
+            except Exception as exc:
+                messagebox.showerror("Web overlay", f"Could not start server:\n{exc}")
+                return
+            self.cfg.web_overlay_enabled = True
+            self.cfg.save()
+            self._append_log(
+                f"OBS web overlay running — add a Browser Source at {self.web_overlay.url}")
+        if hasattr(self, "web_btn"):
+            self.web_btn.config(
+                text="Stop OBS overlay" if self.web_overlay.running else "Start OBS overlay")
 
     def _choose_avatar(self, hero: str) -> None:
         path = filedialog.askopenfilename(
@@ -485,18 +536,51 @@ class App:
             self.cfg.match_threshold = float(self.threshold_var.get())
             self.cfg.poll_interval = float(self.interval_var.get())
             self.cfg.confirm_count = int(self.confirm_var.get())
+            self.cfg.web_overlay_port = int(self.web_port_var.get())
         except (tk.TclError, ValueError):
-            messagebox.showwarning("Settings", "Tuning values must be numbers.")
+            messagebox.showwarning("Settings", "Numeric fields must be numbers.")
             return
+        self.cfg.stage_style = self.style_var.get()
+        self.cfg.show_now_playing = bool(self.nowplaying_var.get())
         self.cfg.save()
         if not silent:
             self._append_log("Settings saved.")
+
+    def _auto_find_region(self) -> None:
+        if not gamewindow.backend_available():
+            messagebox.showinfo(
+                "Auto-detect", "Window detection needs the 'pygetwindow' package "
+                "(included in the Windows build).")
+            return
+        rect = gamewindow.find_game_rect(self.cfg.game_window_title)
+        if not rect:
+            messagebox.showinfo(
+                "Auto-detect",
+                f"Couldn't find a window matching '{self.cfg.game_window_title}'. "
+                "Make sure Marvel Rivals is running.")
+            return
+        self.cfg.capture_region = gamewindow.suggest_hud_region(rect)
+        self.cfg.save()
+        self._update_region_label()
+        self._append_log(
+            "Auto-detected game window; suggested a HUD region. "
+            "Use Preview / Select region to fine-tune, then re-capture references.")
+
+    def refresh_widgets_from_config(self) -> None:
+        """Re-sync settings widgets after the wizard (or auto-detect) changes cfg."""
+        self.client_id_var.set(self.cfg.spotify.client_id)
+        self.client_secret_var.set(self.cfg.spotify.client_secret)
+        self.redirect_var.set(self.cfg.spotify.redirect_uri)
+        self._update_region_label()
+        self._refresh_status()
 
     def _on_close(self) -> None:
         self.monitor.stop()
         if self.stage:
             self.stage.close()
         self.visualizer.stop()
+        self.nowplaying.stop()
+        self.web_overlay.stop()
         self.root.destroy()
 
 

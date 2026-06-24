@@ -67,6 +67,33 @@ class SpotifyController:
             return data["device"]["id"]
         return devices[0][1]
 
+    def current_track(self) -> Optional[dict]:
+        """Return the currently playing track, or None if nothing is playing.
+
+        Shape: {title, artist, album_art_url, progress_ms, duration_ms,
+        is_playing}. Returns None on any error so callers can degrade quietly.
+        """
+        if not self._sp:
+            return None
+        try:
+            data = self._sp.current_playback()
+        except Exception:
+            return None
+        if not data or not data.get("item"):
+            return None
+        item = data["item"]
+        images = (item.get("album", {}) or {}).get("images", []) or []
+        art = images[0]["url"] if images else ""
+        artists = ", ".join(a["name"] for a in item.get("artists", []))
+        return {
+            "title": item.get("name", ""),
+            "artist": artists,
+            "album_art_url": art,
+            "progress_ms": data.get("progress_ms", 0) or 0,
+            "duration_ms": item.get("duration_ms", 0) or 0,
+            "is_playing": bool(data.get("is_playing", False)),
+        }
+
     def play_playlist(self, playlist_uri: str) -> None:
         """Start playback of ``playlist_uri`` on the chosen device."""
         if not self._sp:

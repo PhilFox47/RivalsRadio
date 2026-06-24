@@ -104,7 +104,24 @@ the hero/playlist names and a **live audio-reactive visualizer**.
   box and **Save mappings**.
 - **Visualizer:** reacts to your PC's actual audio via WASAPI loopback (the
   `soundcard` package, Windows). If that backend isn't available, the Stage still
-  runs — the bars just idle instead of reacting.
+  runs — the bars just idle instead of reacting. Pick a style in **Settings →
+  Stage & overlay**: `bars`, `mirror`, or `radial`.
+- **Now playing:** with a track playing, the Stage shows the current title,
+  artist, album art and a progress bar (toggle in Settings).
+
+### OBS / streaming (browser source)
+
+In **Settings → Stage & overlay**, click **Start OBS overlay**. Then in OBS add a
+**Browser Source** pointing at `http://localhost:8770/` (the port is
+configurable). It renders the same hero / accent / now-playing / visualizer as
+the desktop Stage, so you can drop it straight into a stream layout.
+
+### First-run wizard & auto-detect
+
+On first launch a short **setup wizard** walks you through Spotify → capture
+region → calibration. You can re-find the region any time with **Settings → HUD
+capture region → Auto-detect game** (locates the Marvel Rivals window and
+suggests a HUD box to fine-tune).
 
 ## Running as an .exe (no terminal)
 

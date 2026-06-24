@@ -21,6 +21,7 @@ a = Analysis(
         "spotipy.oauth2",
         "soundcard",
         "cffi",
+        "pygetwindow",
     ],
     hookspath=[],
     hooksconfig={},

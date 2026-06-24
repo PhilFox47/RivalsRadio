@@ -85,6 +85,16 @@ class Config:
     poll_interval: float = 2.0      # seconds between screen reads
     confirm_count: int = 2          # consecutive matches before switching
 
+    # Stage / presentation.
+    stage_style: str = "bars"       # visualizer style: bars | mirror | radial
+    show_now_playing: bool = True   # show track + album art + progress on Stage
+    web_overlay_enabled: bool = False  # serve the Stage as an OBS browser source
+    web_overlay_port: int = 8770
+
+    # Onboarding / window detection.
+    setup_complete: bool = False
+    game_window_title: str = "Marvel Rivals"
+
     @property
     def references_dir(self) -> str:
         return os.path.join(app_data_dir(), "references")
@@ -124,6 +134,12 @@ class Config:
             match_threshold=raw.get("match_threshold", 0.70),
             poll_interval=raw.get("poll_interval", 2.0),
             confirm_count=raw.get("confirm_count", 2),
+            stage_style=raw.get("stage_style", "bars"),
+            show_now_playing=raw.get("show_now_playing", True),
+            web_overlay_enabled=raw.get("web_overlay_enabled", False),
+            web_overlay_port=raw.get("web_overlay_port", 8770),
+            setup_complete=raw.get("setup_complete", False),
+            game_window_title=raw.get("game_window_title", "Marvel Rivals"),
         )
         cfg.ensure_default_heroes()
         return cfg
@@ -140,6 +156,12 @@ class Config:
             "match_threshold": self.match_threshold,
             "poll_interval": self.poll_interval,
             "confirm_count": self.confirm_count,
+            "stage_style": self.stage_style,
+            "show_now_playing": self.show_now_playing,
+            "web_overlay_enabled": self.web_overlay_enabled,
+            "web_overlay_port": self.web_overlay_port,
+            "setup_complete": self.setup_complete,
+            "game_window_title": self.game_window_title,
         }
 
     # ----- helpers -------------------------------------------------------
