@@ -163,9 +163,22 @@ Every push to the dev branch builds a Windows executable automatically.
 
 1. Go to the repo's **Actions** tab → **Build Windows EXE** → the latest run.
 2. Download the **RivalsRadio-windows** artifact at the bottom.
-3. Unzip and double-click `RivalsRadio.exe`.
+3. Unzip it **keeping the folder intact**, then double-click `RivalsRadio.exe`.
 
-Tagged versions (e.g. pushing a `v1.0.0` tag) also attach the exe to a GitHub
+The zip is a self-contained bundle:
+
+```
+RivalsRadio.exe                 ← the app
+bridge/RivalsRadioBridge.exe    ← the Overwolf GEP bridge (built automatically)
+```
+
+Keep `RivalsRadio.exe` and the `bridge/` folder together — the app looks for
+the bridge right next to itself and uses it as the primary (exact) hero source,
+falling back to screen capture if it isn't there. The bridge is built
+**best-effort**: if the Overwolf build ever fails, the zip still contains a
+working `RivalsRadio.exe` (screen-capture mode), just without `bridge/`.
+
+Tagged versions (e.g. pushing a `v1.0.0` tag) also attach the zip to a GitHub
 **Release** for easy linking.
 
 ### Option B — build it locally

@@ -10,6 +10,24 @@
   "overwolf": {
     "packages": ["gep"]
   },
+  "build": {
+    "appId": "com.rivalsradio.bridge",
+    "productName": "RivalsRadioBridge",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "index.html",
+      "package.json"
+    ],
+    "win": {
+      "target": "portable"
+    },
+    "portable": {
+      "artifactName": "RivalsRadioBridge.exe"
+    }
+  },
   "devDependencies": {
     "@overwolf/ow-electron": "latest",
     "@overwolf/ow-electron-builder": "latest"

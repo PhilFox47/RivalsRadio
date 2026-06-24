@@ -1,11 +1,20 @@
 name: Build Windows EXE
 
-# Builds a standalone RivalsRadio.exe on a Windows runner so you can just
-# download it — no local Python or terminal needed.
+# Builds a standalone, self-contained RivalsRadio bundle on a Windows runner so
+# you can just download a zip and run it — no local Python, Node, or terminal.
+#
+# The zip contains:
+#   RivalsRadio.exe              <- the app (Python / PyInstaller)
+#   bridge/RivalsRadioBridge.exe <- the Overwolf GEP bridge (ow-electron), if built
+#
+# At runtime RivalsRadio looks for bridge/RivalsRadioBridge.exe next to itself
+# and uses it as the primary (exact) hero source, falling back to screen capture
+# if it isn't present. The bridge build is best-effort: if it fails, the app
+# still ships and works in screen-capture mode.
 #
 # - Runs on pushes to the dev branch and on version tags (v1.0.0, ...).
 # - Can also be triggered manually from the Actions tab (Run workflow).
-# - The exe is uploaded as a build artifact; tagged builds also create a Release.
+# - The zip is uploaded as a build artifact; tagged builds also create a Release.
 
 on:
   push:
@@ -28,22 +37,49 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
-      - name: Build executable
+      - name: Build RivalsRadio.exe
         run: pyinstaller --noconfirm RivalsRadio.spec
+
+      - name: Build Overwolf GEP bridge (best-effort)
+        id: bridge
+        continue-on-error: true
+        working-directory: bridge
+        run: |
+          npm install
+          npm run dist
+
+      - name: Assemble bundle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path bundle | Out-Null
+          Copy-Item dist/RivalsRadio.exe bundle/
+          $bridgeExe = "bridge/dist/RivalsRadioBridge.exe"
+          if (Test-Path $bridgeExe) {
+            New-Item -ItemType Directory -Force -Path bundle/bridge | Out-Null
+            Copy-Item $bridgeExe bundle/bridge/
+            Write-Host "::notice::Overwolf bridge bundled — GEP available out of the box."
+          } else {
+            Write-Host "::warning::Bridge exe not found; bundling screen-capture-only build."
+          }
+          Compress-Archive -Path bundle/* -DestinationPath RivalsRadio-windows.zip -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: RivalsRadio-windows
-          path: dist/RivalsRadio.exe
+          path: RivalsRadio-windows.zip
 
       - name: Attach to release (tagged builds only)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/RivalsRadio.exe
+          files: RivalsRadio-windows.zip
