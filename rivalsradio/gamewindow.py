@@ -38,15 +38,17 @@ def find_game_rect(title_substring: str) -> Optional[Tuple[int, int, int, int]]:
 
 
 def suggest_hud_region(rect: Tuple[int, int, int, int]) -> CaptureRegion:
-    """Heuristic HUD region: the bottom-right ability-icon cluster.
+    """Heuristic HUD region: the bottom-left hero portrait.
 
-    This is a starting point — the user can fine-tune it with the region
-    selector and Test detection.
+    The portrait (your hero's face, lower-left) is a more stable anchor than the
+    right-side ability icons, which change with cooldowns / ammo / ult charge.
+    This is a starting box the user can fine-tune with the region selector and
+    Test detection; keep it tight on the face, away from the frame edges (which
+    can glow when your ultimate is ready).
     """
     left, top, width, height = rect
-    # Bottom-right area where ultimate/ability icons live, as fractions.
-    rx = left + int(width * 0.78)
-    ry = top + int(height * 0.82)
-    rw = int(width * 0.20)
-    rh = int(height * 0.16)
+    rx = left + int(width * 0.02)
+    ry = top + int(height * 0.88)
+    rw = int(width * 0.07)
+    rh = int(height * 0.11)
     return CaptureRegion(left=rx, top=ry, width=rw, height=rh)

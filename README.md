@@ -10,7 +10,8 @@ There's no public Marvel Rivals API that reports your live hero, so RivalsRadio
 **watches your screen** instead:
 
 1. You record a one-time **reference snapshot** of a small HUD region per hero
-   (the ability/ultimate icons in the corner are unique to each hero).
+   (the hero portrait in the bottom-left corner — your hero's face — is the best
+   anchor, since it's unique per hero and doesn't change during play).
 2. While you play, the app captures that region every couple of seconds and
    matches it against your saved references.
 3. When it confirms you've switched heroes, it starts that hero's Spotify
@@ -71,9 +72,11 @@ Then in the app:
 
 ## Tips for reliable detection
 
-- Choose a HUD region that's **always visible while playing** and **distinct per
-  hero** — the ability/ultimate icon cluster works well. Avoid the crosshair,
-  health bar, or anything that looks similar across heroes.
+- **Best anchor: the bottom-left hero portrait** (your hero's face). It's always
+  on screen, unique per hero, and — unlike the right-side ability icons — it
+  doesn't change with cooldowns, ammo, or ult charge, so matching stays stable.
+  Keep the box tight on the face, away from the frame edges (which can glow when
+  your ultimate is ready). Avoid the crosshair and health bar.
 - Matching is **tolerant to small HUD drift and moderate resolution changes**
   (the template is matched at several scales inside a slightly larger search
   window), but a big resolution change can still warrant re-capturing.

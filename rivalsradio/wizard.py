@@ -110,8 +110,9 @@ class SetupWizard:
         ttk.Label(self.body, wraplength=510, foreground="#555", text=(
             "RivalsRadio reads a small part of your screen to tell which hero "
             "you're on. With Marvel Rivals running, auto-detect the window for a "
-            "suggested region, then fine-tune by dragging your own box around the "
-            "ability/ultimate icons."
+            "suggested region, then fine-tune by dragging a tight box around the "
+            "hero portrait in the bottom-left corner (your hero's face). It's a "
+            "steadier anchor than the ability icons, which change with cooldowns."
         )).pack(anchor="w", pady=(4, 10))
 
         ttk.Button(self.body, text="Auto-detect game window",
