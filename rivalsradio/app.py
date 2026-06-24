@@ -71,6 +71,7 @@ class App:
         self.start_btn = ttk.Button(btns, text="Start monitoring", command=self._toggle_monitor)
         self.start_btn.pack(side="left")
         ttk.Button(btns, text="Connect Spotify", command=self._connect_spotify).pack(side="left", padx=8)
+        ttk.Button(btns, text="Test detection", command=self._test_detection).pack(side="left")
 
         ttk.Label(tab, text="Activity log:").pack(anchor="w", padx=12, pady=(12, 2))
         self.log_text = tk.Text(tab, height=14, state="disabled", wrap="word",
@@ -234,6 +235,45 @@ class App:
             messagebox.showerror("Spotify", f"Could not connect:\n{exc}")
             self._append_log(f"Spotify connection failed: {exc}")
         self._refresh_status()
+
+    def _test_detection(self) -> None:
+        """Capture once and report the top hero matches with their scores.
+
+        Use this during calibration: a confident detection has a high top score
+        and a clear gap to the runner-up. If two heroes score close together,
+        re-capture one with a more distinctive HUD region.
+        """
+        if not self.cfg.capture_region.is_valid():
+            messagebox.showwarning("Test", "Set the HUD capture region first.")
+            return
+        refs = self.cfg.heroes_with_references()
+        if not refs:
+            messagebox.showinfo("Test", "No calibrated heroes yet. Capture some first.")
+            return
+        try:
+            grabber = ScreenGrabber()
+            frame = grabber.grab(self.cfg.capture_region)
+            grabber.close()
+        except Exception as exc:
+            messagebox.showerror("Test", f"Screen capture failed:\n{exc}")
+            return
+        from .recognizer import HeroRecognizer
+        recognizer = HeroRecognizer()
+        recognizer.load_references(refs)
+        ranked = recognizer.rank_matches(frame)[:3]
+        thr = self.cfg.match_threshold
+        lines = []
+        for i, (hero, score) in enumerate(ranked):
+            mark = "✓" if (i == 0 and score >= thr) else " "
+            lines.append(f"  {mark} {hero}: {score:.3f}")
+        verdict = (
+            f"Would switch to: {ranked[0][0]}"
+            if ranked and ranked[0][1] >= thr
+            else f"No confident match (threshold {thr:.2f})"
+        )
+        self._append_log("Test detection — " + verdict)
+        for line in lines:
+            self._append_log(line)
 
     def _capture_reference(self, hero: str) -> None:
         if not self.cfg.capture_region.is_valid():

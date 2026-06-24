@@ -1,26 +1,37 @@
 """Hero recognition by matching the live HUD region against saved references.
 
-We use normalized cross-correlation (OpenCV ``TM_CCOEFF_NORMED``) on grayscale,
-fixed-size crops. References are recorded during calibration (one PNG per hero),
-so no copyrighted game art ships with the app.
+We use normalized cross-correlation (OpenCV ``TM_CCOEFF_NORMED``) on grayscale
+crops. References are recorded during calibration (one PNG per hero), so no
+copyrighted game art ships with the app.
+
+Robustness without extra dependencies:
+- The reference template is matched against a slightly larger search window so
+  small positional drift of the HUD doesn't tank the score (translation
+  tolerance).
+- The template is tried at a few scales so a different game resolution doesn't
+  require re-calibrating every hero (scale tolerance).
 """
 
 from __future__ import annotations
 
 import os
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
 
-# All crops are normalized to this size before comparison. Small enough to be
-# fast, large enough to keep the ability-icon detail that distinguishes heroes.
-STANDARD_SIZE = (128, 128)
+# Reference templates are normalized to this size before comparison. Small
+# enough to be fast, large enough to keep the detail that distinguishes heroes.
+TEMPLATE_SIZE = 128
+# The live frame is normalized a bit larger so the template can slide inside it.
+SEARCH_SIZE = 152
+# Scales (relative to TEMPLATE_SIZE) tried for resolution/scale tolerance.
+SCALES = (0.88, 1.0, 1.14)
 
 
-def _normalize(frame_bgr: np.ndarray) -> np.ndarray:
+def _to_gray(frame_bgr: np.ndarray, size: int) -> np.ndarray:
     gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-    return cv2.resize(gray, STANDARD_SIZE, interpolation=cv2.INTER_AREA)
+    return cv2.resize(gray, (size, size), interpolation=cv2.INTER_AREA)
 
 
 def save_reference(frame_bgr: np.ndarray, path: str) -> None:
@@ -42,11 +53,35 @@ class HeroRecognizer:
             img = cv2.imread(path, cv2.IMREAD_COLOR)
             if img is None:
                 continue
-            self._templates[hero] = _normalize(img)
+            self._templates[hero] = _to_gray(img, TEMPLATE_SIZE)
 
     @property
     def hero_count(self) -> int:
         return len(self._templates)
+
+    def _score(self, search: np.ndarray, template: np.ndarray) -> float:
+        """Best correlation of ``template`` against ``search`` over scales."""
+        best = -1.0
+        for scale in SCALES:
+            side = max(8, int(round(TEMPLATE_SIZE * scale)))
+            if side >= search.shape[0]:
+                side = search.shape[0] - 1
+            tpl = cv2.resize(template, (side, side), interpolation=cv2.INTER_AREA)
+            result = cv2.matchTemplate(search, tpl, cv2.TM_CCOEFF_NORMED)
+            best = max(best, float(result.max()))
+        return best
+
+    def rank_matches(self, frame_bgr: np.ndarray) -> List[Tuple[str, float]]:
+        """Return [(hero, score), ...] sorted best-first for all references."""
+        if not self._templates:
+            return []
+        search = _to_gray(frame_bgr, SEARCH_SIZE)
+        scored = [
+            (hero, self._score(search, tpl))
+            for hero, tpl in self._templates.items()
+        ]
+        scored.sort(key=lambda pair: pair[1], reverse=True)
+        return scored
 
     def best_match(self, frame_bgr: np.ndarray) -> Tuple[Optional[str], float]:
         """Return (hero_name, score) for the best matching reference.
@@ -54,16 +89,7 @@ class HeroRecognizer:
         Score is in roughly [-1, 1]; higher means a closer match. Returns
         (None, -1.0) when no references are loaded.
         """
-        if not self._templates:
+        ranked = self.rank_matches(frame_bgr)
+        if not ranked:
             return None, -1.0
-        target = _normalize(frame_bgr)
-        best_name: Optional[str] = None
-        best_score = -1.0
-        for hero, template in self._templates.items():
-            # Same-size inputs -> matchTemplate yields a single 1x1 result.
-            result = cv2.matchTemplate(target, template, cv2.TM_CCOEFF_NORMED)
-            score = float(result[0][0])
-            if score > best_score:
-                best_score = score
-                best_name = hero
-        return best_name, best_score
+        return ranked[0]

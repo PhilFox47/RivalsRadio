@@ -74,8 +74,13 @@ Then in the app:
 - Choose a HUD region that's **always visible while playing** and **distinct per
   hero** — the ability/ultimate icon cluster works well. Avoid the crosshair,
   health bar, or anything that looks similar across heroes.
-- Keep the game at a **consistent resolution**; references are resolution- and
-  position-sensitive. Re-capture if you change resolution.
+- Matching is **tolerant to small HUD drift and moderate resolution changes**
+  (the template is matched at several scales inside a slightly larger search
+  window), but a big resolution change can still warrant re-capturing.
+- Use **Status → Test detection** while in a match to see the live top-3 match
+  scores. A confident setup shows a high top score with a clear gap to the
+  runner-up; if two heroes score close together, re-capture one of them using a
+  more distinctive HUD region.
 - Tune in **Settings → Detection tuning**:
   - **Match threshold** (0–1): raise it if heroes get confused for each other,
     lower it if switches are missed. ~0.7 is a good start.
