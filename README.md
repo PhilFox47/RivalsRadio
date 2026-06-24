@@ -88,6 +88,32 @@ Then in the app:
     enemy hero), but slower to react.
   - **Poll interval**: how often it reads the screen.
 
+## Running as an .exe (no terminal)
+
+You don't have to launch from a terminal. There are two ways to get a
+standalone `RivalsRadio.exe`:
+
+### Option A — download it from GitHub Actions (no tools needed)
+
+Every push to the dev branch builds a Windows executable automatically.
+
+1. Go to the repo's **Actions** tab → **Build Windows EXE** → the latest run.
+2. Download the **RivalsRadio-windows** artifact at the bottom.
+3. Unzip and double-click `RivalsRadio.exe`.
+
+Tagged versions (e.g. pushing a `v1.0.0` tag) also attach the exe to a GitHub
+**Release** for easy linking.
+
+### Option B — build it locally
+
+On your Windows PC, just run **`build.bat`** (double-click it). It sets up a
+virtual environment, installs everything, and produces `dist\RivalsRadio.exe`.
+Move that file anywhere and double-click to run — no Python or terminal needed
+afterwards. (For a desktop shortcut, right-click the exe → *Send to → Desktop*.)
+
+> The exe is windowed (no console pops up). It still writes its config and
+> reference images to `~/.rivalsradio/` as usual.
+
 ## Configuration storage
 
 Config and reference images live in `~/.rivalsradio/` (override with the
