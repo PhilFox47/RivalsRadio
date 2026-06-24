@@ -37,6 +37,7 @@ def app_data_dir() -> str:
         base = os.path.join(os.path.expanduser("~"), ".rivalsradio")
     os.makedirs(base, exist_ok=True)
     os.makedirs(os.path.join(base, "references"), exist_ok=True)
+    os.makedirs(os.path.join(base, "avatars"), exist_ok=True)
     return base
 
 
@@ -66,6 +67,11 @@ class HeroConfig:
     playlist_uri: str = ""
     # Filename (relative to references/) of the calibration snapshot, if any.
     reference: str = ""
+    # Filename (relative to avatars/) of the hero artwork shown on the Stage.
+    avatar: str = ""
+    # Optional manual accent override as "#RRGGBB". Blank = auto-extract from
+    # the avatar image.
+    accent: str = ""
 
 
 @dataclass
@@ -82,6 +88,16 @@ class Config:
     @property
     def references_dir(self) -> str:
         return os.path.join(app_data_dir(), "references")
+
+    @property
+    def avatars_dir(self) -> str:
+        return os.path.join(app_data_dir(), "avatars")
+
+    def avatar_path(self, hero: str) -> Optional[str]:
+        h = self.heroes.get(hero)
+        if not h or not h.avatar:
+            return None
+        return os.path.join(self.avatars_dir, h.avatar)
 
     # ----- persistence ---------------------------------------------------
     @classmethod

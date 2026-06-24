@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import os
 import queue
+import shutil
 import time
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 
+from . import theming
 from .config import Config, HeroConfig
 from .capture import ScreenGrabber
 from .recognizer import save_reference
 from .region_selector import select_region
 from .spotify_controller import SpotifyController
 from .monitor import Monitor
+from .audio_visualizer import AudioVisualizer
+from .stage import StageWindow
 
 ACCENT = "#1DB954"  # Spotify green
 
@@ -28,11 +32,17 @@ class App:
         self.cfg = Config.load()
         self.spotify = SpotifyController(self.cfg.spotify)
         self._log_queue: "queue.Queue[str]" = queue.Queue()
+        self._hero_queue: "queue.Queue[str]" = queue.Queue()
         self.monitor = Monitor(
             self.cfg, self.spotify,
             on_log=self._enqueue_log,
-            on_hero=lambda hero: self._enqueue_log(f"▶ Now playing as: {hero}"),
+            on_hero=self._on_hero_detected,
         )
+
+        # Stage (second-screen) view + its audio source, created on demand.
+        self.visualizer = AudioVisualizer()
+        self.stage: "StageWindow | None" = None
+        self._accent_cache: dict = {}  # hero -> auto-extracted accent hex
 
         self._build_ui()
         self._refresh_status()
@@ -72,6 +82,7 @@ class App:
         self.start_btn.pack(side="left")
         ttk.Button(btns, text="Connect Spotify", command=self._connect_spotify).pack(side="left", padx=8)
         ttk.Button(btns, text="Test detection", command=self._test_detection).pack(side="left")
+        ttk.Button(btns, text="Open Stage view", command=self._open_stage).pack(side="left", padx=8)
 
         ttk.Label(tab, text="Activity log:").pack(anchor="w", padx=12, pady=(12, 2))
         self.log_text = tk.Text(tab, height=14, state="disabled", wrap="word",
@@ -85,9 +96,11 @@ class App:
 
         ttk.Label(
             tab,
-            text=("For each hero: paste the Spotify playlist URI, then while you're "
-                  "in a match on that hero click 'Capture' to record its HUD."),
-            wraplength=700, foreground="#555",
+            text=("For each hero: paste the Spotify playlist URI, and (while in a "
+                  "match on that hero) click 'Capture' to record its HUD. Set an "
+                  "Avatar image for the Stage view; the accent colour is read from "
+                  "the avatar automatically, or type a #hex override."),
+            wraplength=720, foreground="#555",
         ).pack(anchor="w", padx=12, pady=(12, 6))
 
         # Scrollable list of heroes.
@@ -105,7 +118,9 @@ class App:
         scroll.pack(side="right", fill="y")
 
         self.playlist_vars = {}
+        self.accent_vars = {}
         self.ref_labels = {}
+        self.avatar_labels = {}
         self._render_hero_rows()
 
         add = ttk.Frame(tab)
@@ -119,27 +134,38 @@ class App:
         for child in self.hero_rows.winfo_children():
             child.destroy()
         self.playlist_vars.clear()
+        self.accent_vars.clear()
         self.ref_labels.clear()
+        self.avatar_labels.clear()
 
         header = ttk.Frame(self.hero_rows)
         header.pack(fill="x", pady=(0, 4))
-        ttk.Label(header, text="Hero", width=18, font=("Segoe UI", 9, "bold")).pack(side="left")
+        ttk.Label(header, text="Hero", width=16, font=("Segoe UI", 9, "bold")).pack(side="left")
         ttk.Label(header, text="Spotify playlist URI", font=("Segoe UI", 9, "bold")).pack(side="left")
 
         for hero in sorted(self.cfg.heroes):
+            hc = self.cfg.heroes[hero]
             row = ttk.Frame(self.hero_rows)
             row.pack(fill="x", pady=2)
-            ttk.Label(row, text=hero, width=18).pack(side="left")
-            var = tk.StringVar(value=self.cfg.heroes[hero].playlist_uri)
+            ttk.Label(row, text=hero, width=16).pack(side="left")
+            var = tk.StringVar(value=hc.playlist_uri)
             self.playlist_vars[hero] = var
-            ttk.Entry(row, textvariable=var, width=42).pack(side="left", padx=4)
+            ttk.Entry(row, textvariable=var, width=34).pack(side="left", padx=4)
             ttk.Button(row, text="Capture", width=8,
                        command=lambda h=hero: self._capture_reference(h)).pack(side="left", padx=2)
-            has_ref = "✓" if self.cfg.heroes[hero].reference else "—"
-            lbl = ttk.Label(row, text=has_ref, width=3,
-                            foreground=ACCENT if self.cfg.heroes[hero].reference else "#999")
-            lbl.pack(side="left")
-            self.ref_labels[hero] = lbl
+            ref_lbl = ttk.Label(row, text="✓" if hc.reference else "—", width=2,
+                                foreground=ACCENT if hc.reference else "#999")
+            ref_lbl.pack(side="left")
+            self.ref_labels[hero] = ref_lbl
+            ttk.Button(row, text="Avatar", width=7,
+                       command=lambda h=hero: self._choose_avatar(h)).pack(side="left", padx=2)
+            av_lbl = ttk.Label(row, text="✓" if hc.avatar else "—", width=2,
+                               foreground=ACCENT if hc.avatar else "#999")
+            av_lbl.pack(side="left")
+            self.avatar_labels[hero] = av_lbl
+            acc = tk.StringVar(value=hc.accent)
+            self.accent_vars[hero] = acc
+            ttk.Entry(row, textvariable=acc, width=8).pack(side="left", padx=2)
             ttk.Button(row, text="✕", width=2,
                        command=lambda h=hero: self._remove_hero(h)).pack(side="left", padx=2)
 
@@ -192,6 +218,11 @@ class App:
     def _enqueue_log(self, message: str) -> None:
         self._log_queue.put(message)
 
+    def _on_hero_detected(self, hero: str) -> None:
+        """Monitor callback (background thread): log + signal the Stage."""
+        self._enqueue_log(f"▶ Now playing as: {hero}")
+        self._hero_queue.put(hero)
+
     def _drain_log_queue(self) -> None:
         try:
             while True:
@@ -199,6 +230,12 @@ class App:
                 self._append_log(msg)
                 if msg.startswith("▶ Now playing as: "):
                     self.hero_var.set(msg.replace("▶ Now playing as: ", ""))
+        except queue.Empty:
+            pass
+        try:
+            while True:
+                hero = self._hero_queue.get_nowait()
+                self._update_stage(hero)
         except queue.Empty:
             pass
         self._refresh_status()
@@ -275,6 +312,67 @@ class App:
         for line in lines:
             self._append_log(line)
 
+    # ----- Stage (second screen) -------------------------------------
+    def _effective_accent(self, hero: str) -> str:
+        """Resolve a hero's accent: manual override > auto from avatar > default."""
+        hc = self.cfg.heroes.get(hero)
+        if hc and hc.accent and theming.is_valid_hex(hc.accent):
+            return hc.accent
+        if hero in self._accent_cache:
+            return self._accent_cache[hero]
+        path = self.cfg.avatar_path(hero)
+        accent = theming.extract_accent(path) if path else theming.DEFAULT_ACCENT
+        self._accent_cache[hero] = accent
+        return accent
+
+    def _open_stage(self) -> None:
+        if self.stage and self.stage.alive:
+            self.stage.top.deiconify()
+            self.stage.top.lift()
+            return
+        self.stage = StageWindow(self.root, self.visualizer)
+        if not self.visualizer.available:
+            self._append_log(
+                "Stage opened. Audio visualizer backend unavailable "
+                "(install 'soundcard' on Windows for live audio bars).")
+        else:
+            self._append_log("Stage opened. Drag it to your second screen, F11 = fullscreen.")
+        # If we already know the current hero, show it immediately.
+        current = self.hero_var.get()
+        if current and current != "—":
+            self._update_stage(current)
+
+    def _update_stage(self, hero: str) -> None:
+        if not (self.stage and self.stage.alive):
+            return
+        path = self.cfg.avatar_path(hero)
+        accent = self._effective_accent(hero)
+        self.stage.set_hero(hero, path, accent, playlist_name="")
+
+    def _choose_avatar(self, hero: str) -> None:
+        path = filedialog.askopenfilename(
+            title=f"Choose avatar for {hero}",
+            filetypes=[("Images", "*.png *.webp *.jpg *.jpeg"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        ext = os.path.splitext(path)[1].lower() or ".png"
+        filename = f"{hero.replace(' ', '_').replace('&', 'and')}{ext}"
+        dest = os.path.join(self.cfg.avatars_dir, filename)
+        try:
+            shutil.copyfile(path, dest)
+        except OSError as exc:
+            messagebox.showerror("Avatar", f"Could not copy image:\n{exc}")
+            return
+        self.cfg.heroes[hero].avatar = filename
+        self.cfg.save()
+        self._accent_cache.pop(hero, None)  # re-extract next time
+        self.avatar_labels[hero].config(text="✓", foreground=ACCENT)
+        self._append_log(f"Avatar set for {hero} (accent: {self._effective_accent(hero)}).")
+        # Live-update the Stage if it's showing this hero.
+        if self.hero_var.get() == hero:
+            self._update_stage(hero)
+
     def _capture_reference(self, hero: str) -> None:
         if not self.cfg.capture_region.is_valid():
             messagebox.showwarning(
@@ -313,22 +411,31 @@ class App:
     def _remove_hero(self, hero: str) -> None:
         if not messagebox.askyesno("Remove", f"Remove {hero}?"):
             return
-        ref = self.cfg.reference_path(hero)
-        if ref and os.path.exists(ref):
-            try:
-                os.remove(ref)
-            except OSError:
-                pass
+        for path in (self.cfg.reference_path(hero), self.cfg.avatar_path(hero)):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
         self.cfg.heroes.pop(hero, None)
+        self._accent_cache.pop(hero, None)
         self.cfg.save()
         self._render_hero_rows()
 
     def _save_heroes(self, silent: bool = False) -> None:
         for hero, var in self.playlist_vars.items():
             self.cfg.heroes[hero].playlist_uri = var.get().strip()
+        for hero, var in self.accent_vars.items():
+            value = var.get().strip()
+            if value and not theming.is_valid_hex(value):
+                messagebox.showwarning(
+                    "Accent", f"'{value}' for {hero} is not a valid #RRGGBB colour.")
+                return
+            self.cfg.heroes[hero].accent = value
+            self._accent_cache.pop(hero, None)  # let override take effect
         self.cfg.save()
         if not silent:
-            self._append_log("Saved hero → playlist mappings.")
+            self._append_log("Saved hero mappings (playlists + accents).")
 
     def _select_region(self) -> None:
         region = select_region(self.root)
@@ -387,6 +494,9 @@ class App:
 
     def _on_close(self) -> None:
         self.monitor.stop()
+        if self.stage:
+            self.stage.close()
+        self.visualizer.stop()
         self.root.destroy()
 
 

@@ -88,6 +88,24 @@ Then in the app:
     enemy hero), but slower to react.
   - **Poll interval**: how often it reads the screen.
 
+## Stage view (second screen)
+
+The **Stage** is a large, themed "now playing" window built for a second
+monitor. It shows the current hero's artwork on an accent-tinted background with
+the hero/playlist names and a **live audio-reactive visualizer**.
+
+- Click **Status → Open Stage view**, drag the window to your second screen, and
+  press **F11** for fullscreen (**Esc** to exit fullscreen).
+- **Avatars:** in the **Heroes tab**, click **Avatar** next to a hero and pick a
+  transparent PNG/WebP (square renders look best — like the official hero
+  splash art). The file is copied into `~/.rivalsradio/avatars/`.
+- **Accent colour:** auto-extracted from each avatar (e.g. Doctor Strange → red,
+  Luna Snow → ice blue). To override, type a `#RRGGBB` value in the hero's accent
+  box and **Save mappings**.
+- **Visualizer:** reacts to your PC's actual audio via WASAPI loopback (the
+  `soundcard` package, Windows). If that backend isn't available, the Stage still
+  runs — the bars just idle instead of reacting.
+
 ## Running as an .exe (no terminal)
 
 You don't have to launch from a terminal. There are two ways to get a

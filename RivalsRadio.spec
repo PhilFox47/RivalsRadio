@@ -19,6 +19,8 @@ a = Analysis(
         "PIL.ImageTk",
         "spotipy",
         "spotipy.oauth2",
+        "soundcard",
+        "cffi",
     ],
     hookspath=[],
     hooksconfig={},
