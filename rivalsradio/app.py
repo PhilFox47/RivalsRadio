@@ -9,7 +9,7 @@ import time
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
-from . import theming, gamewindow
+from . import theming, gamewindow, ui_theme
 from .config import Config, HeroConfig
 from .capture import ScreenGrabber
 from .recognizer import save_reference
@@ -23,15 +23,17 @@ from .nowplaying import NowPlaying
 from .web_overlay import WebOverlay
 from .wizard import SetupWizard
 
-ACCENT = "#1DB954"  # Spotify green
+ACCENT = ui_theme.ACCENT  # Spotify green
+MUTED = ui_theme.MUTED
 
 
 class App:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("RivalsRadio")
-        self.root.geometry("760x620")
-        self.root.minsize(680, 560)
+        self.root.geometry("820x680")
+        self.root.minsize(720, 600)
+        self.pal = ui_theme.apply(self.root)
 
         self.cfg = Config.load()
         self.spotify = SpotifyController(self.cfg.spotify)
@@ -67,11 +69,25 @@ class App:
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self) -> None:
+        self._build_header()
         nb = ttk.Notebook(self.root)
-        nb.pack(fill="both", expand=True, padx=8, pady=8)
+        nb.pack(fill="both", expand=True, padx=10, pady=(4, 10))
         self._build_status_tab(nb)
         self._build_heroes_tab(nb)
         self._build_settings_tab(nb)
+
+    def _build_header(self) -> None:
+        header = ttk.Frame(self.root, style="Card.TFrame")
+        header.pack(fill="x", side="top")
+        # Thin accent rule under the header for a branded touch.
+        tk.Frame(header, bg=ACCENT, height=3).pack(fill="x", side="bottom")
+
+        row = ttk.Frame(header, style="Card.TFrame")
+        row.pack(fill="x", padx=20, pady=(16, 14))
+        ttk.Label(row, text="Rivals", style="Title.TLabel").pack(side="left")
+        ttk.Label(row, text="Radio", style="TitleAccent.TLabel").pack(side="left")
+        ttk.Label(row, text="hero-aware Spotify for Marvel Rivals",
+                  style="CardMuted.TLabel").pack(side="left", padx=(12, 0))
 
     # ----- Status tab -------------------------------------------------
     def _build_status_tab(self, nb: ttk.Notebook) -> None:
@@ -94,16 +110,27 @@ class App:
 
         btns = ttk.Frame(tab)
         btns.pack(fill="x", padx=12, pady=4)
-        self.start_btn = ttk.Button(btns, text="Start monitoring", command=self._toggle_monitor)
+        self.start_btn = ttk.Button(btns, text="Start monitoring",
+                                    style="Accent.TButton", command=self._toggle_monitor)
         self.start_btn.pack(side="left")
         ttk.Button(btns, text="Connect Spotify", command=self._connect_spotify).pack(side="left", padx=8)
         ttk.Button(btns, text="Test detection", command=self._test_detection).pack(side="left")
         ttk.Button(btns, text="Open Stage view", command=self._open_stage).pack(side="left", padx=8)
 
-        ttk.Label(tab, text="Activity log:").pack(anchor="w", padx=12, pady=(12, 2))
-        self.log_text = tk.Text(tab, height=14, state="disabled", wrap="word",
-                                bg="#1e1e1e", fg="#dddddd", font=("Consolas", 9))
-        self.log_text.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        ttk.Label(tab, text="Activity log", style="Heading.TLabel").pack(anchor="w", padx=12, pady=(14, 4))
+        log_wrap = tk.Frame(tab, bg=self.pal["border"], bd=0, highlightthickness=0)
+        log_wrap.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self.log_text = tk.Text(
+            log_wrap, height=14, state="disabled", wrap="word",
+            bg=self.pal["surface"], fg=self.pal["text"], font=self.pal["font_mono"],
+            relief="flat", bd=0, highlightthickness=0, padx=12, pady=10,
+            insertbackground=self.pal["text"], selectbackground=ACCENT,
+            selectforeground="#08210f", spacing1=1, spacing3=3,
+        )
+        self.log_text.pack(fill="both", expand=True, padx=1, pady=1)
+        self.log_text.tag_config("accent", foreground=ACCENT)
+        self.log_text.tag_config("muted", foreground=MUTED)
+        self.log_text.tag_config("warn", foreground=self.pal["warn"])
 
     # ----- Heroes tab -------------------------------------------------
     def _build_heroes_tab(self, nb: ttk.Notebook) -> None:
@@ -116,13 +143,13 @@ class App:
                   "match on that hero) click 'Capture' to record its HUD. Set an "
                   "Avatar image for the Stage view; the accent colour is read from "
                   "the avatar automatically, or type a #hex override."),
-            wraplength=720, foreground="#555",
+            wraplength=720, style="Muted.TLabel",
         ).pack(anchor="w", padx=12, pady=(12, 6))
 
         # Scrollable list of heroes.
         container = ttk.Frame(tab)
         container.pack(fill="both", expand=True, padx=12, pady=4)
-        canvas = tk.Canvas(container, highlightthickness=0)
+        canvas = tk.Canvas(container, highlightthickness=0, bg=self.pal["bg"], bd=0)
         scroll = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
         self.hero_rows = ttk.Frame(canvas)
         self.hero_rows.bind(
@@ -144,7 +171,8 @@ class App:
         self.new_hero_var = tk.StringVar()
         ttk.Entry(add, textvariable=self.new_hero_var, width=24).pack(side="left")
         ttk.Button(add, text="Add hero", command=self._add_hero).pack(side="left", padx=6)
-        ttk.Button(add, text="Save mappings", command=self._save_heroes).pack(side="right")
+        ttk.Button(add, text="Save mappings", style="Accent.TButton",
+                   command=self._save_heroes).pack(side="right")
 
     def _render_hero_rows(self) -> None:
         for child in self.hero_rows.winfo_children():
@@ -170,19 +198,19 @@ class App:
             ttk.Button(row, text="Capture", width=8,
                        command=lambda h=hero: self._capture_reference(h)).pack(side="left", padx=2)
             ref_lbl = ttk.Label(row, text="✓" if hc.reference else "—", width=2,
-                                foreground=ACCENT if hc.reference else "#999")
+                                foreground=ACCENT if hc.reference else MUTED)
             ref_lbl.pack(side="left")
             self.ref_labels[hero] = ref_lbl
             ttk.Button(row, text="Avatar", width=7,
                        command=lambda h=hero: self._choose_avatar(h)).pack(side="left", padx=2)
             av_lbl = ttk.Label(row, text="✓" if hc.avatar else "—", width=2,
-                               foreground=ACCENT if hc.avatar else "#999")
+                               foreground=ACCENT if hc.avatar else MUTED)
             av_lbl.pack(side="left")
             self.avatar_labels[hero] = av_lbl
             acc = tk.StringVar(value=hc.accent)
             self.accent_vars[hero] = acc
             ttk.Entry(row, textvariable=acc, width=8).pack(side="left", padx=2)
-            ttk.Button(row, text="✕", width=2,
+            ttk.Button(row, text="✕", width=2, style="Ghost.TButton",
                        command=lambda h=hero: self._remove_hero(h)).pack(side="left", padx=2)
 
     # ----- Settings tab ----------------------------------------------
@@ -209,8 +237,8 @@ class App:
         self.source_var = tk.StringVar(value=self.cfg.hero_source)
         ttk.Combobox(df, textvariable=self.source_var, width=10, state="readonly",
                      values=["auto", "gep", "screen"]).grid(row=0, column=1, sticky="w", padx=8)
-        ttk.Label(df, text="(auto = Overwolf GEP, screen-capture fallback)",
-                  foreground="#777").grid(row=0, column=2, sticky="w", padx=8)
+        ttk.Label(df, text="auto = Overwolf GEP, screen-capture fallback",
+                  style="Muted.TLabel").grid(row=0, column=2, sticky="w", padx=8)
         ttk.Label(df, text="GEP bridge command").grid(row=1, column=0, sticky="w", padx=8, pady=4)
         self.bridge_cmd_var = tk.StringVar(value=self.cfg.gep_bridge_cmd)
         ttk.Entry(df, textvariable=self.bridge_cmd_var, width=46).grid(
@@ -253,7 +281,8 @@ class App:
         self._labeled_entry(tf, "Poll interval (s)", self.interval_var, 1)
         self._labeled_entry(tf, "Confirm count", self.confirm_var, 2)
 
-        ttk.Button(tab, text="Save settings", command=self._save_settings).pack(pady=12)
+        ttk.Button(tab, text="Save settings", style="Accent.TButton",
+                   command=self._save_settings).pack(pady=14)
 
         self._update_region_label()
 
@@ -292,15 +321,24 @@ class App:
 
     def _append_log(self, message: str) -> None:
         ts = time.strftime("%H:%M:%S")
+        if message.startswith("▶"):
+            tag = "accent"
+        elif any(w in message.lower() for w in ("fail", "could not", "not found", "unavailable", "error")):
+            tag = "warn"
+        else:
+            tag = None
         self.log_text.config(state="normal")
-        self.log_text.insert("end", f"[{ts}] {message}\n")
+        self.log_text.insert("end", f"[{ts}] ", ("muted",))
+        self.log_text.insert("end", f"{message}\n", (tag,) if tag else ())
         self.log_text.see("end")
         self.log_text.config(state="disabled")
 
     def _refresh_status(self) -> None:
-        self.status_var.set("Running" if self.monitor.running else "Idle")
+        running = self.monitor.running
+        self.status_var.set("Running" if running else "Idle")
         self.start_btn.config(
-            text="Stop monitoring" if self.monitor.running else "Start monitoring"
+            text="Stop monitoring" if running else "Start monitoring",
+            style="Danger.TButton" if running else "Accent.TButton",
         )
         self.spotify_var.set("Connected" if self.spotify.connected else "Not connected")
 
