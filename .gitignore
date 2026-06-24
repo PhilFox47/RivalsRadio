@@ -7,3 +7,6 @@ env/
 *.png
 !docs/*.png
 .DS_Store
+bridge/node_modules/
+bridge/dist/
+bridge/out/

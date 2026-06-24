@@ -95,6 +95,12 @@ class Config:
     setup_complete: bool = False
     game_window_title: str = "Marvel Rivals"
 
+    # Hero detection source: "screen" (screen capture) or "gep" (Overwolf bridge).
+    hero_source: str = "screen"
+    # Command to launch the Overwolf GEP bridge (e.g. path to its .exe, or
+    # "npm start --prefix bridge"). Blank = look for a bundled bridge.
+    gep_bridge_cmd: str = ""
+
     @property
     def references_dir(self) -> str:
         return os.path.join(app_data_dir(), "references")
@@ -102,6 +108,20 @@ class Config:
     @property
     def avatars_dir(self) -> str:
         return os.path.join(app_data_dir(), "avatars")
+
+    def canonical_hero(self, name: str) -> str:
+        """Resolve a detected hero name to the roster's canonical spelling.
+
+        GEP reports e.g. "JEFF THE LAND SHARK"; the roster key is
+        "Jeff the Land Shark". Match case-insensitively; fall back to the input.
+        """
+        if name in self.heroes:
+            return name
+        low = name.lower()
+        for key in self.heroes:
+            if key.lower() == low:
+                return key
+        return name
 
     def avatar_path(self, hero: str) -> Optional[str]:
         h = self.heroes.get(hero)
@@ -140,6 +160,8 @@ class Config:
             web_overlay_port=raw.get("web_overlay_port", 8770),
             setup_complete=raw.get("setup_complete", False),
             game_window_title=raw.get("game_window_title", "Marvel Rivals"),
+            hero_source=raw.get("hero_source", "screen"),
+            gep_bridge_cmd=raw.get("gep_bridge_cmd", ""),
         )
         cfg.ensure_default_heroes()
         return cfg
@@ -162,6 +184,8 @@ class Config:
             "web_overlay_port": self.web_overlay_port,
             "setup_complete": self.setup_complete,
             "game_window_title": self.game_window_title,
+            "hero_source": self.hero_source,
+            "gep_bridge_cmd": self.gep_bridge_cmd,
         }
 
     # ----- helpers -------------------------------------------------------

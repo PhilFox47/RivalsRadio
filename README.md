@@ -22,6 +22,24 @@ There's no public Marvel Rivals API that reports your live hero, so RivalsRadio
 > not interact with the game's anti-cheat. (Avoid any tool that claims to read
 > the game's memory; that's what gets accounts banned.)
 
+## Detection source: screen capture vs Overwolf GEP
+
+Hero detection is **pluggable** (Settings → *Hero detection source*):
+
+| | `screen` (default) | `gep` (Overwolf bridge) |
+|---|---|---|
+| Accuracy | Good (depends on calibration) | **Exact** — reads the real hero from the game's events |
+| Setup | Calibrate references per hero | Build the ow-electron bridge once (Node + Overwolf dev account) |
+| Dependencies | None extra | The bundled bridge (no separate Overwolf client) |
+| Screen capture | Yes | **No** |
+
+The **`gep`** source uses a small **standalone [ow-electron](bridge/README.md)
+bridge** — *white-label, no separate Overwolf client to run*. RivalsRadio
+launches it as a child process on Start and closes it on exit, and reads exact
+hero changes from it. Marvel Rivals (`24890`) is in Overwolf's supported-games
+list. See [`bridge/README.md`](bridge/README.md) to build it. Everything
+downstream (Spotify, Stage, OBS overlay) is identical for both sources.
+
 ## Requirements
 
 - **Windows or macOS** gaming PC (where the game and Spotify both run).

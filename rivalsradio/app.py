@@ -202,6 +202,20 @@ class App:
         self._labeled_entry(sf, "Redirect URI", self.redirect_var, 2)
         self._labeled_entry(sf, "Device name (optional)", self.device_var, 3)
 
+        # Hero detection source.
+        df = ttk.LabelFrame(tab, text="Hero detection source")
+        df.pack(fill="x", padx=12, pady=8)
+        ttk.Label(df, text="Source").grid(row=0, column=0, sticky="w", padx=8, pady=4)
+        self.source_var = tk.StringVar(value=self.cfg.hero_source)
+        ttk.Combobox(df, textvariable=self.source_var, width=10, state="readonly",
+                     values=["screen", "gep"]).grid(row=0, column=1, sticky="w", padx=8)
+        ttk.Label(df, text="(screen = capture; gep = Overwolf bridge, exact)",
+                  foreground="#777").grid(row=0, column=2, sticky="w", padx=8)
+        ttk.Label(df, text="GEP bridge command").grid(row=1, column=0, sticky="w", padx=8, pady=4)
+        self.bridge_cmd_var = tk.StringVar(value=self.cfg.gep_bridge_cmd)
+        ttk.Entry(df, textvariable=self.bridge_cmd_var, width=46).grid(
+            row=1, column=1, columnspan=2, sticky="w", padx=8)
+
         # Capture region.
         cf = ttk.LabelFrame(tab, text="HUD capture region")
         cf.pack(fill="x", padx=12, pady=8)
@@ -542,6 +556,8 @@ class App:
             return
         self.cfg.stage_style = self.style_var.get()
         self.cfg.show_now_playing = bool(self.nowplaying_var.get())
+        self.cfg.hero_source = self.source_var.get()
+        self.cfg.gep_bridge_cmd = self.bridge_cmd_var.get().strip()
         self.cfg.save()
         if not silent:
             self._append_log("Settings saved.")
