@@ -271,8 +271,10 @@ class App:
         add = ctk.CTkFrame(page, fg_color="transparent")
         add.pack(fill="x", padx=24, pady=(8, 24))
         self.new_hero_var = tk.StringVar()
-        ctk.CTkEntry(add, textvariable=self.new_hero_var, width=220, height=36,
-                     placeholder_text="New hero name", fg_color=CARD_HI, border_width=0).pack(side="left")
+        new_entry = ctk.CTkEntry(add, textvariable=self.new_hero_var, width=220, height=36,
+                                 placeholder_text="New hero name", fg_color=CARD_HI, border_width=0)
+        new_entry.pack(side="left")
+        new_entry.bind("<Return>", lambda _e: self._add_hero())
         ctk.CTkButton(add, text="Add hero", height=36, font=self.f_bold,
                       command=self._add_hero, **NEUTRAL_BTN).pack(side="left", padx=8)
         ctk.CTkButton(add, text="Save mappings", height=36, width=150, font=self.f_bold,
@@ -285,6 +287,7 @@ class App:
         self.accent_vars.clear()
         self.ref_labels.clear()
         self.avatar_labels.clear()
+        self._rendered_hero_count = len(self.cfg.heroes)
 
         for hero in sorted(self.cfg.heroes):
             hc = self.cfg.heroes[hero]
@@ -432,8 +435,26 @@ class App:
                 self._update_stage(hero)
         except queue.Empty:
             pass
+        # If the monitor auto-added a newly-detected hero, surface it in the
+        # Heroes list without discarding any playlist text typed but not saved.
+        if hasattr(self, "_rendered_hero_count") and \
+                len(self.cfg.heroes) != self._rendered_hero_count:
+            self._persist_hero_edits()
+            self._render_hero_rows()
         self._refresh_status()
         self.root.after(250, self._drain_log_queue)
+
+    def _persist_hero_edits(self) -> None:
+        """Save current hero-row edits without validation dialogs (for refreshes)."""
+        for hero, var in self.playlist_vars.items():
+            if hero in self.cfg.heroes:
+                self.cfg.heroes[hero].playlist_uri = var.get().strip()
+        for hero, var in self.accent_vars.items():
+            if hero in self.cfg.heroes:
+                value = var.get().strip()
+                if not value or theming.is_valid_hex(value):
+                    self.cfg.heroes[hero].accent = value
+        self.cfg.save()
 
     def _append_log(self, message: str) -> None:
         ts = time.strftime("%H:%M:%S")

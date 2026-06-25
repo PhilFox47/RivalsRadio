@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from .config import Config
+from .config import Config, HeroConfig
 from .hero_source import GepHeroSource, ScreenHeroSource, HeroSource
 from .spotify_controller import SpotifyController
 
@@ -95,6 +95,14 @@ class Monitor:
     def _switch_hero(self, hero: str) -> None:
         self._current_hero = hero
         self.on_hero(hero)
+        # Self-expanding roster: if the game reports a hero we've never seen
+        # (e.g. a newly released character), add it so it shows up in the
+        # Heroes tab ready for a playlist — no manual add or app update needed.
+        if hero not in self.cfg.heroes:
+            self.cfg.heroes[hero] = HeroConfig()
+            self.cfg.save()
+            self.on_log(f"New hero '{hero}' added to your roster — "
+                        f"map a playlist for it in the Heroes tab.")
         hero_cfg = self.cfg.heroes.get(hero)
         playlist = hero_cfg.playlist_uri if hero_cfg else ""
         if not playlist:
