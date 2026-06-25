@@ -81,8 +81,20 @@ jobs:
           name: RivalsRadio-windows
           path: RivalsRadio-windows.zip
 
-      - name: Attach to release (tagged builds only)
+      - name: Publish release (tagged builds only)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          name: RivalsRadio ${{ github.ref_name }}
           files: RivalsRadio-windows.zip
+          generate_release_notes: true
+          body: |
+            **RivalsRadio for Windows** — self-contained download.
+
+            1. Download `RivalsRadio-windows.zip` below.
+            2. Unzip it **keeping the folder intact**.
+            3. Double-click `RivalsRadio.exe`.
+
+            The zip bundles the app and the Overwolf GEP bridge
+            (`bridge/RivalsRadioBridge.exe`). Detection source `auto` prefers the
+            bridge and falls back to screen capture automatically.
