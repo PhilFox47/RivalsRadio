@@ -6,6 +6,7 @@ env/
 .spotify_token_cache
 *.png
 !docs/*.png
+!assets/*.png
 .DS_Store
 bridge/node_modules/
 bridge/dist/
