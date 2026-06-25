@@ -60,11 +60,13 @@ class StageWindow:
         self._viz_items: list = []
         self._levels: list = []
         self._last_size: Tuple[int, int] = (0, 0)
+        self._resize_after: Optional[str] = None
         self._fullscreen = False
         self._closed = False
 
         self.top.bind("<Configure>", self._on_configure)
         self.top.bind("<F11>", self._toggle_fullscreen)
+        self.top.bind("<Double-Button-1>", self._toggle_fullscreen)
         self.top.bind("<Escape>", lambda e: self._set_fullscreen(False))
         self.top.protocol("WM_DELETE_WINDOW", self.close)
 
@@ -98,10 +100,20 @@ class StageWindow:
             pass
 
     def _on_configure(self, event) -> None:
-        if event.widget is self.top:
-            size = (self.canvas.winfo_width(), self.canvas.winfo_height())
-            if size != self._last_size and size[0] > 1 and size[1] > 1:
-                self._rebuild()
+        # Debounce: a resize / fullscreen toggle fires a burst of Configure
+        # events. Re-render once the size settles so it stays smooth and always
+        # ends at the final dimensions, regardless of screen size.
+        if event.widget is not self.top:
+            return
+        size = (self.canvas.winfo_width(), self.canvas.winfo_height())
+        if size == self._last_size or size[0] <= 1 or size[1] <= 1:
+            return
+        if self._resize_after is not None:
+            try:
+                self.top.after_cancel(self._resize_after)
+            except Exception:
+                pass
+        self._resize_after = self.top.after(90, self._rebuild)
 
     # ----------------------------------------------------------- rendering
     def _load_avatar(self, path: Optional[str]) -> Optional[Image.Image]:
@@ -123,6 +135,7 @@ class StageWindow:
     def _rebuild(self, crossfade: bool = False) -> None:
         if self._closed:
             return
+        self._resize_after = None
         w = max(1, self.canvas.winfo_width())
         h = max(1, self.canvas.winfo_height())
         self._last_size = (w, h)
@@ -142,6 +155,11 @@ class StageWindow:
         name_size = max(20, int(h * 0.075))
         self._text("name_sh", w // 2 + 2, int(h * 0.10) + 2, name, name_size, "#000000", bold=True)
         self._text("name", w // 2, int(h * 0.10), name, name_size, "#ffffff", bold=True)
+
+        # Discoverable fullscreen hint (double-click or F11 anywhere).
+        hint = "Double-click or F11 for fullscreen · Esc to exit"
+        self._text("hint", w - 12, 10, hint, max(10, int(h * 0.016)),
+                   "#6b7178", anchor="ne")
 
         if self.cfg.show_now_playing:
             self._build_now_playing(w, h)

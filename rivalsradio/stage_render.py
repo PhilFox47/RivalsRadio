@@ -8,11 +8,16 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
+import numpy as np
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 from . import theming
 
 BG_BOTTOM = (5, 6, 10)
+# The gradient + glow are smooth/blurry, so they can be rendered at a capped
+# resolution and upscaled with no visible loss. This keeps large/4K fullscreen
+# fast; only the sharp avatar is composited at full resolution.
+RENDER_CAP = 1280
 
 
 def screen_blend(base: Image.Image, glow: Image.Image) -> Image.Image:
@@ -26,22 +31,33 @@ def render_background(w: int, h: int, accent: Tuple[int, int, int],
     dark = theming.scale(accent, 0.16)
     top_col = theming.mix(BG_BOTTOM, dark, 0.9)
 
-    # Vertical gradient (brighter, accent-tinted at the top).
-    bg = Image.new("RGB", (w, h), BG_BOTTOM)
-    grad = Image.new("L", (1, h))
-    for y in range(h):
-        grad.putpixel((0, y), int(255 * (1 - y / h)))
-    grad = grad.resize((w, h))
-    bg = Image.composite(Image.new("RGB", (w, h), top_col), bg, grad)
+    # Work out a capped render size for the smooth layers.
+    if max(w, h) > RENDER_CAP:
+        s = RENDER_CAP / float(max(w, h))
+        rw, rh = max(1, int(round(w * s))), max(1, int(round(h * s)))
+    else:
+        rw, rh = w, h
+
+    # Vertical gradient (brighter, accent-tinted at the top), vectorised.
+    t = np.linspace(1.0, 0.0, rh, dtype=np.float32)            # 1 at top → 0 at bottom
+    top = np.array(top_col, dtype=np.float32)
+    bot = np.array(BG_BOTTOM, dtype=np.float32)
+    col = bot[None, :] * (1.0 - t)[:, None] + top[None, :] * t[:, None]   # (rh, 3)
+    grad_arr = np.repeat(col[:, None, :], rw, axis=1).astype(np.uint8)    # (rh, rw, 3)
+    bg = Image.fromarray(grad_arr, "RGB")
 
     # Soft accent glow behind the avatar, screen-blended so it only lightens.
-    glow = Image.new("RGB", (w, h), (0, 0, 0))
+    glow = Image.new("RGB", (rw, rh), (0, 0, 0))
     gd = ImageDraw.Draw(glow)
-    cx, cy = w // 2, int(h * 0.52)
-    rr = max(1, int(min(w, h) * 0.42))
+    cx, cy = rw // 2, int(rh * 0.52)
+    rr = max(1, int(min(rw, rh) * 0.42))
     gd.ellipse([cx - rr, cy - rr, cx + rr, cy + rr], fill=theming.scale(accent, 0.5))
     glow = glow.filter(ImageFilter.GaussianBlur(max(1, rr // 2)))
     bg = screen_blend(bg, glow)
+
+    # Upscale the smooth layers to the real size before the sharp avatar.
+    if (rw, rh) != (w, h):
+        bg = bg.resize((w, h), Image.BILINEAR)
 
     # Composite the transparent avatar, centred and scaled to fit.
     if avatar is not None:
