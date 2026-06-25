@@ -21,13 +21,14 @@ import sys
 import threading
 from typing import Callable, List, Optional
 
-from .config import Config
+from .config import Config, app_data_dir
 from .capture import ScreenGrabber
 from .recognizer import HeroRecognizer
 
 LogFn = Callable[[str], None]
 HeroFn = Callable[[str], None]
 FailFn = Callable[[], None]
+EventFn = Callable[[dict], None]
 
 
 class HeroSource:
@@ -41,7 +42,8 @@ class HeroSource:
         return ""
 
     def start(self, on_hero: HeroFn, on_log: LogFn,
-              on_failed: Optional[FailFn] = None) -> None:
+              on_failed: Optional[FailFn] = None,
+              on_event: Optional[EventFn] = None) -> None:
         raise NotImplementedError
 
     def stop(self) -> None:
@@ -70,7 +72,9 @@ class ScreenHeroSource(HeroSource):
         return ""
 
     def start(self, on_hero: HeroFn, on_log: LogFn,
-              on_failed: Optional[FailFn] = None) -> None:
+              on_failed: Optional[FailFn] = None,
+              on_event: Optional[EventFn] = None) -> None:
+        # Screen capture has no rich game events; on_event is ignored.
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._run, args=(on_hero, on_log), name="screen-source", daemon=True)
@@ -151,7 +155,8 @@ class GepHeroSource(HeroSource):
                 "the app.")
 
     def start(self, on_hero: HeroFn, on_log: LogFn,
-              on_failed: Optional[FailFn] = None) -> None:
+              on_failed: Optional[FailFn] = None,
+              on_event: Optional[EventFn] = None) -> None:
         cmd = self._resolve_cmd()
         if not cmd:
             on_log("Cannot start GEP: " + self.unavailable_reason())
@@ -159,10 +164,16 @@ class GepHeroSource(HeroSource):
                 on_failed()
             return
         self._stop.clear()
+        env = os.environ.copy()
+        if getattr(self.cfg, "gep_debug", False):
+            log_path = os.path.join(app_data_dir(), "gep-debug.log")
+            env["RIVALSRADIO_GEP_DEBUG"] = "1"
+            env["RIVALSRADIO_GEP_LOG"] = log_path
+            on_log(f"GEP debug logging enabled → {log_path}")
         try:
             self._proc = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, bufsize=1)
+                text=True, bufsize=1, env=env)
         except Exception as exc:
             on_log(f"Failed to launch GEP bridge: {exc}")
             if on_failed:
@@ -170,12 +181,13 @@ class GepHeroSource(HeroSource):
             return
         on_log("Overwolf GEP bridge launched — waiting for hero data…")
         self._thread = threading.Thread(
-            target=self._read, args=(on_hero, on_log, on_failed),
+            target=self._read, args=(on_hero, on_log, on_failed, on_event),
             name="gep-source", daemon=True)
         self._thread.start()
 
     def _read(self, on_hero: HeroFn, on_log: LogFn,
-              on_failed: Optional[FailFn] = None) -> None:
+              on_failed: Optional[FailFn] = None,
+              on_event: Optional[EventFn] = None) -> None:
         assert self._proc and self._proc.stdout
         last: Optional[str] = None
         for line in self._proc.stdout:
@@ -188,13 +200,17 @@ class GepHeroSource(HeroSource):
                 msg = json.loads(line)
             except json.JSONDecodeError:
                 continue  # ignore non-JSON log noise from the bridge
-            if msg.get("type") == "hero":
+            mtype = msg.get("type")
+            if mtype == "hero":
                 hero = msg.get("hero")
                 if hero and hero != last:
                     last = hero
                     on_hero(hero)
-            elif msg.get("type") == "log":
+            elif mtype == "log":
                 on_log(f"[bridge] {msg.get('message', '')}")
+            elif mtype in ("match", "stats") and on_event:
+                # Rich game events (match result, local KDA) for session stats.
+                on_event(msg)
         if not self._stop.is_set():
             on_log("GEP bridge exited.")
             if on_failed:

@@ -12,7 +12,7 @@ from tkinter import messagebox, filedialog
 import customtkinter as ctk
 
 from . import theming, gamewindow
-from .config import Config, HeroConfig
+from .config import Config, HeroConfig, app_data_dir
 from .capture import ScreenGrabber
 from .recognizer import save_reference
 from .region_selector import select_region
@@ -24,6 +24,7 @@ from .stage_state import StageState
 from .nowplaying import NowPlaying
 from .web_overlay import WebOverlay
 from .wizard import SetupWizard
+from .stats import SessionStats
 
 # ---- Palette -------------------------------------------------------------
 ACCENT = "#1DB954"
@@ -72,10 +73,13 @@ class App:
         self.spotify = SpotifyController(self.cfg.spotify)
         self._log_queue: "queue.Queue[str]" = queue.Queue()
         self._hero_queue: "queue.Queue[str]" = queue.Queue()
+        self._event_queue: "queue.Queue[dict]" = queue.Queue()
+        self.session_stats = SessionStats()
         self.monitor = Monitor(
             self.cfg, self.spotify,
             on_log=self._enqueue_log,
             on_hero=self._on_hero_detected,
+            on_event=self._enqueue_event,
         )
 
         self.visualizer = AudioVisualizer()
@@ -121,6 +125,7 @@ class App:
         for name, builder in (
             ("Status", self._build_status_page),
             ("Heroes", self._build_heroes_page),
+            ("Stats", self._build_stats_page),
             ("Settings", self._build_settings_page),
         ):
             page = ctk.CTkFrame(content, fg_color=CONTENT_BG, corner_radius=0)
@@ -143,7 +148,7 @@ class App:
         ctk.CTkLabel(bar, text="hero-aware Spotify", font=self.f_small,
                      text_color=MUTED).grid(row=1, column=0, sticky="w", padx=24, pady=(0, 22))
 
-        for i, name in enumerate(("Status", "Heroes", "Settings")):
+        for i, name in enumerate(("Status", "Heroes", "Stats", "Settings")):
             btn = ctk.CTkButton(
                 bar, text=name, font=self.f_nav, anchor="w", height=42,
                 corner_radius=8, fg_color="transparent", text_color=MUTED,
@@ -322,6 +327,75 @@ class App:
                           fg_color="transparent", hover_color=DANGER, text_color=MUTED,
                           command=lambda h=hero: self._remove_hero(h)).pack(side="left", padx=(2, 10))
 
+    # ----- Stats page -------------------------------------------------
+    def _stat_tile(self, parent, caption: str):
+        tile = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=14)
+        tile.pack(side="left", expand=True, fill="x", padx=6)
+        var = tk.StringVar(value="—")
+        ctk.CTkLabel(tile, textvariable=var, font=self.f_h1, text_color=TEXT).pack(
+            anchor="w", padx=16, pady=(14, 0))
+        ctk.CTkLabel(tile, text=caption, font=self.f_small, text_color=MUTED).pack(
+            anchor="w", padx=16, pady=(0, 14))
+        return var
+
+    def _build_stats_page(self, page) -> None:
+        header = ctk.CTkFrame(page, fg_color="transparent")
+        header.pack(fill="x", padx=24, pady=(24, 4))
+        ctk.CTkLabel(header, text="Stats", font=self.f_h1, text_color=TEXT).pack(side="left")
+        ctk.CTkButton(header, text="Reset session", height=34, font=self.f_small,
+                      command=self._reset_stats, **NEUTRAL_BTN).pack(side="right")
+        ctk.CTkLabel(page, text="This session — playtime is tracked live; match results "
+                     "and KDA come from the Overwolf GEP bridge when available.",
+                     font=self.f_small, text_color=MUTED).pack(anchor="w", padx=24, pady=(0, 8))
+
+        tiles = ctk.CTkFrame(page, fg_color="transparent")
+        tiles.pack(fill="x", padx=18, pady=4)
+        self.stat_playtime = self._stat_tile(tiles, "Session playtime")
+        self.stat_matches = self._stat_tile(tiles, "Matches (W–L)")
+        self.stat_winrate = self._stat_tile(tiles, "Win rate")
+        self.stat_kda = self._stat_tile(tiles, "KDA")
+
+        card = self._card(page, "Hero breakdown", fill="both", expand=True, pady=(10, 24))
+        wrap = ctk.CTkFrame(card, fg_color=LOG_BG, corner_radius=10)
+        wrap.pack(fill="both", expand=True, padx=18, pady=(2, 16))
+        self.stats_text = tk.Text(
+            wrap, state="disabled", wrap="none", bg=LOG_BG, fg=LOG_FG, font=self.f_mono,
+            relief="flat", bd=0, highlightthickness=0, padx=14, pady=12)
+        self.stats_text.pack(fill="both", expand=True, padx=6, pady=6)
+        self.stats_text.tag_config("head", foreground=MUTED)
+        self.stats_text.tag_config("accent", foreground=ACCENT)
+        self._refresh_stats()
+
+    def _fmt_dur(self, seconds: float) -> str:
+        m, s = divmod(int(seconds), 60)
+        h, m = divmod(m, 60)
+        return f"{h}h {m:02d}m" if h else f"{m}m {s:02d}s"
+
+    def _refresh_stats(self) -> None:
+        if not hasattr(self, "stat_kda"):
+            return
+        s = self.session_stats.snapshot()
+        self.stat_playtime.set(self._fmt_dur(s["duration"]))
+        self.stat_matches.set(f"{s['matches']}  ({s['wins']}–{s['losses']})")
+        self.stat_winrate.set("—" if s["winrate"] is None else f"{s['winrate']:.0f}%")
+        self.stat_kda.set(f"{s['kda']:.2f}  ({s['kills']}/{s['deaths']}/{s['assists']})")
+
+        self.stats_text.config(state="normal")
+        self.stats_text.delete("1.0", "end")
+        self.stats_text.insert("end", f"{'Hero':<20}{'Playtime':>12}{'Plays':>8}\n", ("head",))
+        for h in s["heroes"]:
+            mark = "▸ " if h["hero"] == s["current"] else "  "
+            line = f"{mark}{h['hero']:<18}{self._fmt_dur(h['seconds']):>12}{h['plays']:>8}\n"
+            self.stats_text.insert("end", line, ("accent",) if h["hero"] == s["current"] else ())
+        if not s["heroes"]:
+            self.stats_text.insert("end", "\n  No heroes played yet this session.", ("head",))
+        self.stats_text.config(state="disabled")
+
+    def _reset_stats(self) -> None:
+        self.session_stats.reset()
+        self._refresh_stats()
+        self._append_log("Session stats reset.")
+
     # ----- Settings page ----------------------------------------------
     def _build_settings_page(self, page) -> None:
         page.grid_rowconfigure(0, weight=1)
@@ -356,7 +430,12 @@ class App:
         self.bridge_cmd_var = tk.StringVar(value=self.cfg.gep_bridge_cmd)
         self._labeled_entry(df, "GEP bridge command", self.bridge_cmd_var,
                             placeholder="blank = use the bundled bridge")
-        ctk.CTkFrame(df, fg_color="transparent", height=8).pack()
+        self.gep_debug_var = tk.BooleanVar(value=self.cfg.gep_debug)
+        ctk.CTkSwitch(df, text="Log raw GEP events for diagnostics",
+                      variable=self.gep_debug_var, command=self._toggle_gep_debug,
+                      font=self.f_body, progress_color=ACCENT).pack(anchor="w", padx=18, pady=(8, 2))
+        ctk.CTkLabel(df, text=f"Writes to {os.path.join(app_data_dir(), 'gep-debug.log')}",
+                     font=self.f_small, text_color=MUTED).pack(anchor="w", padx=18, pady=(0, 14))
 
         # Capture region.
         cf = self._card(scroll, "HUD capture region")
@@ -416,6 +495,9 @@ class App:
     def _enqueue_log(self, message: str) -> None:
         self._log_queue.put(message)
 
+    def _enqueue_event(self, event: dict) -> None:
+        self._event_queue.put(event)
+
     def _on_hero_detected(self, hero: str) -> None:
         self._enqueue_log(f"▶ Now playing as: {hero}")
         self._hero_queue.put(hero)
@@ -435,6 +517,12 @@ class App:
                 self._update_stage(hero)
         except queue.Empty:
             pass
+        try:
+            while True:
+                self._handle_game_event(self._event_queue.get_nowait())
+        except queue.Empty:
+            pass
+        self._refresh_stats()
         # If the monitor auto-added a newly-detected hero, surface it in the
         # Heroes list without discarding any playlist text typed but not saved.
         if hasattr(self, "_rendered_hero_count") and \
@@ -509,6 +597,15 @@ class App:
             self.monitor.start()
             self._refresh_status()
 
+    def _toggle_gep_debug(self) -> None:
+        self.cfg.gep_debug = bool(self.gep_debug_var.get())
+        self.cfg.save()
+        self._append_log(f"GEP debug logging {'on' if self.cfg.gep_debug else 'off'}.")
+        if self.monitor.running:  # re-launch the bridge so the change applies now
+            self.monitor.stop()
+            self.monitor.start()
+            self._refresh_status()
+
     def _connect_spotify(self) -> None:
         self._save_settings(silent=True)
         try:
@@ -577,10 +674,22 @@ class App:
         else:
             self._append_log("Stage opened. Drag it to your second screen, F11 = fullscreen.")
 
+    def _handle_game_event(self, event: dict) -> None:
+        """Feed best-effort GEP match/KDA events into the session stats."""
+        etype = event.get("type")
+        if etype == "match" and event.get("result"):
+            self.session_stats.note_match_result(event["result"])
+            self._append_log(f"Match {event['result']} recorded.")
+        elif etype == "stats":
+            self.session_stats.note_kda(
+                event.get("kills", 0), event.get("deaths", 0), event.get("assists", 0))
+
     def _update_stage(self, hero: str) -> None:
         path = self.cfg.avatar_path(hero)
         accent = self._effective_accent(hero)
         self.state.set_hero(hero, path, accent)
+        playlist = self.cfg.heroes[hero].playlist_uri if hero in self.cfg.heroes else ""
+        self.session_stats.note_hero(hero, playlist)
 
     def _toggle_web_overlay(self, initial: bool = False) -> None:
         if self.web_overlay.running and not initial:
@@ -745,6 +854,7 @@ class App:
         self.cfg.show_now_playing = bool(self.nowplaying_var.get())
         self.cfg.hero_source = self.source_var.get()
         self.cfg.gep_bridge_cmd = self.bridge_cmd_var.get().strip()
+        self.cfg.gep_debug = bool(self.gep_debug_var.get())
         self.cfg.save()
         if not silent:
             self._append_log("Settings saved.")

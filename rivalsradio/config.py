@@ -101,6 +101,9 @@ class Config:
     # Command to launch the Overwolf GEP bridge (e.g. path to its .exe, or
     # "npm start --prefix bridge"). Blank = look for a bundled bridge.
     gep_bridge_cmd: str = ""
+    # When true, the bridge writes every raw GEP event to gep-debug.log so the
+    # exact field names can be confirmed/mapped from a live game.
+    gep_debug: bool = False
 
     @property
     def references_dir(self) -> str:
@@ -163,6 +166,7 @@ class Config:
             game_window_title=raw.get("game_window_title", "Marvel Rivals"),
             hero_source=raw.get("hero_source", "auto"),
             gep_bridge_cmd=raw.get("gep_bridge_cmd", ""),
+            gep_debug=raw.get("gep_debug", False),
         )
         cfg.ensure_default_heroes()
         return cfg
@@ -187,6 +191,7 @@ class Config:
             "game_window_title": self.game_window_title,
             "hero_source": self.hero_source,
             "gep_bridge_cmd": self.gep_bridge_cmd,
+            "gep_debug": self.gep_debug,
         }
 
     # ----- helpers -------------------------------------------------------

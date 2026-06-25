@@ -15,15 +15,18 @@ from .spotify_controller import SpotifyController
 
 LogFn = Callable[[str], None]
 HeroFn = Callable[[Optional[str]], None]
+EventFn = Callable[[dict], None]
 
 
 class Monitor:
     def __init__(self, cfg: Config, spotify: SpotifyController,
-                 on_log: LogFn, on_hero: HeroFn) -> None:
+                 on_log: LogFn, on_hero: HeroFn,
+                 on_event: Optional[EventFn] = None) -> None:
         self.cfg = cfg
         self.spotify = spotify
         self.on_log = on_log
         self.on_hero = on_hero
+        self.on_event = on_event
 
         self._source: Optional[HeroSource] = None
         self._current_hero: Optional[str] = None
@@ -60,7 +63,7 @@ class Monitor:
             self._running = False
             return
         self._source = source
-        source.start(self._on_candidate, self.on_log, self._on_source_failed)
+        source.start(self._on_candidate, self.on_log, self._on_source_failed, self.on_event)
         self.on_log(f"Monitoring started using the '{source.name}' hero source.")
 
     def _on_source_failed(self) -> None:
