@@ -8,6 +8,8 @@ block_cipher = None
 
 # CustomTkinter ships its themes/fonts as data files that must be bundled.
 ctk_datas = collect_data_files("customtkinter")
+# Bundle the app icon so the window can set it at runtime too.
+ctk_datas += [("assets/icon.ico", "assets")]
 
 a = Analysis(
     ["main.py"],
@@ -62,5 +64,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    # icon="docs/icon.ico",  # add an .ico here if you want a custom icon
+    icon="assets/icon.ico",
 )

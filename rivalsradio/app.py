@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import queue
 import shutil
+import sys
 import time
 import tkinter as tk
 from tkinter import messagebox, filedialog
@@ -58,6 +59,7 @@ class App:
         self.root.geometry("1000x720")
         self.root.minsize(880, 620)
         self.root.configure(fg_color=CONTENT_BG)
+        self._set_window_icon()
 
         # Fonts (must be created after the root exists).
         self.f_brand = ctk.CTkFont(size=22, weight="bold")
@@ -110,6 +112,16 @@ class App:
             self._toggle_web_overlay(initial=True)
         if not self.cfg.setup_complete:
             self.root.after(300, lambda: SetupWizard(self.root, self))
+
+    def _set_window_icon(self) -> None:
+        """Set the taskbar/title-bar icon from the bundled .ico (Windows)."""
+        base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        ico = os.path.join(base, "assets", "icon.ico")
+        if os.path.exists(ico):
+            try:
+                self.root.iconbitmap(ico)
+            except Exception:
+                pass  # .ico is Windows-only; ignore elsewhere
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self) -> None:
