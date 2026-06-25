@@ -23,6 +23,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Publish a Release with this tag/version (e.g. v0.1.0). Leave blank to just build."
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -81,11 +86,12 @@ jobs:
           name: RivalsRadio-windows
           path: RivalsRadio-windows.zip
 
-      - name: Publish release (tagged builds only)
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Publish release (tag push, or manual run with a version)
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_version != '')
         uses: softprops/action-gh-release@v2
         with:
-          name: RivalsRadio ${{ github.ref_name }}
+          tag_name: ${{ github.event.inputs.release_version || github.ref_name }}
+          name: RivalsRadio ${{ github.event.inputs.release_version || github.ref_name }}
           files: RivalsRadio-windows.zip
           generate_release_notes: true
           body: |
