@@ -2,13 +2,18 @@
 # Build with:  pyinstaller RivalsRadio.spec
 # Produces a single windowed executable in dist/ (no console window).
 
+from PyInstaller.utils.hooks import collect_data_files
+
 block_cipher = None
+
+# CustomTkinter ships its themes/fonts as data files that must be bundled.
+ctk_datas = collect_data_files("customtkinter")
 
 a = Analysis(
     ["main.py"],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=ctk_datas,
     # spotipy/cv2/mss are imported lazily in places; list them so PyInstaller's
     # static analysis definitely bundles them.
     hiddenimports=[
@@ -22,6 +27,8 @@ a = Analysis(
         "soundcard",
         "cffi",
         "pygetwindow",
+        "customtkinter",
+        "darkdetect",
     ],
     hookspath=[],
     hooksconfig={},
