@@ -6,6 +6,7 @@ import os
 import queue
 import shutil
 import sys
+import threading
 import time
 import tkinter as tk
 from tkinter import messagebox, filedialog
@@ -620,13 +621,20 @@ class App:
 
     def _connect_spotify(self) -> None:
         self._save_settings(silent=True)
-        try:
-            self.spotify.connect()
-            self._append_log("Spotify connected.")
-        except Exception as exc:
-            messagebox.showerror("Spotify", f"Could not connect:\n{exc}")
-            self._append_log(f"Spotify connection failed: {exc}")
-        self._refresh_status()
+        self._append_log(
+            "Connecting to Spotify — a browser will open. Approve access there. "
+            f"(Redirect URI: {self.cfg.spotify.redirect_uri})")
+
+        def worker() -> None:
+            # Runs off the UI thread: spotipy blocks waiting for the browser
+            # redirect, so doing this inline would freeze the window.
+            try:
+                self.spotify.connect()
+                self._enqueue_log("Spotify connected.")
+            except Exception as exc:
+                self._enqueue_log(f"Spotify connection failed: {exc}")
+
+        threading.Thread(target=worker, name="spotify-connect", daemon=True).start()
 
     def _test_detection(self) -> None:
         if not self.cfg.capture_region.is_valid():

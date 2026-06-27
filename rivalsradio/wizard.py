@@ -137,11 +137,24 @@ class SetupWizard:
 
     def _connect(self) -> None:
         self._save_spotify()
-        try:
-            self.app.spotify.connect()
-            self.sp_status.configure(text="Connected ✓", text_color=ACCENT)
-        except Exception as exc:
-            messagebox.showerror("Spotify", f"Could not connect:\n{exc}")
+        self.sp_status.configure(text="Connecting… approve in your browser",
+                                 text_color=MUTED)
+
+        def worker() -> None:
+            # Off the UI thread so the wizard can't freeze while spotipy waits
+            # for the browser redirect.
+            try:
+                self.app.spotify.connect()
+                self.top.after(0, lambda: self.sp_status.configure(
+                    text="Connected ✓", text_color=ACCENT))
+            except Exception as exc:
+                msg = str(exc)
+                self.top.after(0, lambda: (
+                    self.sp_status.configure(text="Not connected", text_color=MUTED),
+                    messagebox.showerror("Spotify", f"Could not connect:\n{msg}")))
+
+        import threading
+        threading.Thread(target=worker, name="spotify-connect", daemon=True).start()
 
     def _step_region(self) -> None:
         self._title("Step 2 — Set the HUD capture region")
