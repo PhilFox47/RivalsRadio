@@ -70,13 +70,15 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path bundle | Out-Null
           Copy-Item dist/RivalsRadio.exe bundle/
-          $bridgeExe = "bridge/dist/RivalsRadioBridge.exe"
-          if (Test-Path $bridgeExe) {
+          # The bridge is now an unpacked app folder (dir target), not a
+          # single-file portable exe, so Overwolf can provision its packages.
+          $bridgeDir = "bridge/dist/win-unpacked"
+          if (Test-Path "$bridgeDir/RivalsRadioBridge.exe") {
             New-Item -ItemType Directory -Force -Path bundle/bridge | Out-Null
-            Copy-Item $bridgeExe bundle/bridge/
-            Write-Host "::notice::Overwolf bridge bundled — GEP available out of the box."
+            Copy-Item "$bridgeDir/*" bundle/bridge/ -Recurse
+            Write-Host "::notice::Overwolf bridge (unpacked) bundled — GEP available out of the box."
           } else {
-            Write-Host "::warning::Bridge exe not found; bundling screen-capture-only build."
+            Write-Host "::warning::Bridge build not found; bundling screen-capture-only build."
           }
           Compress-Archive -Path bundle/* -DestinationPath RivalsRadio-windows.zip -Force
 

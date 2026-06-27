@@ -24,10 +24,7 @@
       "package.json"
     ],
     "win": {
-      "target": "portable"
-    },
-    "portable": {
-      "artifactName": "RivalsRadioBridge.exe"
+      "target": "dir"
     }
   },
   "devDependencies": {

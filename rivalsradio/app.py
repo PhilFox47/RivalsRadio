@@ -443,6 +443,9 @@ class App:
         self.bridge_cmd_var = tk.StringVar(value=self.cfg.gep_bridge_cmd)
         self._labeled_entry(df, "GEP bridge command", self.bridge_cmd_var,
                             placeholder="blank = use the bundled bridge")
+        self.pkg_url_var = tk.StringVar(value=self.cfg.gep_packages_url)
+        self._labeled_entry(df, "GEP packages URL (advanced)", self.pkg_url_var,
+                            placeholder="blank = Overwolf PROD; QA URL for DEV games")
         self.gep_debug_var = tk.BooleanVar(value=self.cfg.gep_debug)
         ctk.CTkSwitch(df, text="Log raw GEP events for diagnostics",
                       variable=self.gep_debug_var, command=self._toggle_gep_debug,
@@ -881,6 +884,7 @@ class App:
         self.cfg.show_now_playing = bool(self.nowplaying_var.get())
         self.cfg.hero_source = self.source_var.get()
         self.cfg.gep_bridge_cmd = self.bridge_cmd_var.get().strip()
+        self.cfg.gep_packages_url = self.pkg_url_var.get().strip()
         self.cfg.gep_debug = bool(self.gep_debug_var.get())
         self.cfg.save()
         if not silent:
