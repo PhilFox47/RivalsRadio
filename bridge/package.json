@@ -10,7 +10,7 @@
     "dist": "ow-electron-builder --win --publish never"
   },
   "overwolf": {
-    "packages": ["gep"]
+    "packages": ["gep", "overlay"]
   },
   "build": {
     "appId": "com.rivalsradio.bridge",

@@ -17,6 +17,10 @@
 //
 // Marvel Rivals GEP game id (from @overwolf/ow-electron-packages-types):
 const MARVEL_RIVALS = 24890;
+// Candidate GEP features for Marvel Rivals. null = "all" on some versions; we
+// also try an explicit list since ow-electron can require named features.
+const FEATURES = ['game_info', 'match_info', 'kill', 'death', 'roster', 'me',
+                  'match_state', 'game_state'];
 
 const { app, BrowserWindow } = require('electron');
 const fs = require('fs');
@@ -87,14 +91,31 @@ function registerOverwolf() {
   }
   app.overwolf.packages.on('ready', (e, packageName, version) => {
     log('package ready: ' + packageName + ' v' + version);
-    if (packageName !== 'gep') return;
-    setupGep();
+    if (packageName === 'gep') setupGep();
+    else if (packageName === 'overlay') setupOverlay();
   });
   log('registered overwolf ready handler; waiting for the gep package…');
   // Heartbeat so a stalled init is visible in the log.
   setTimeout(() => {
     if (!gepReady) log('still waiting for the gep package after 20s (is Overwolf installed/allowed?)');
   }, 20000);
+}
+
+// ow-electron needs games registered for tracking; registerGames lives on the
+// overlay package. Register Marvel Rivals so GEP starts detecting it.
+function setupOverlay() {
+  try {
+    const ov = app.overwolf.packages.overlay;
+    if (ov && typeof ov.registerGames === 'function') {
+      ov.registerGames([MARVEL_RIVALS]);
+      log('overlay.registerGames([' + MARVEL_RIVALS + ']) called');
+    } else {
+      log('overlay ready but registerGames missing; keys: ' +
+          (ov ? Object.keys(ov).join(',') : 'none'));
+    }
+  } catch (err) {
+    log('overlay.registerGames failed: ' + err);
+  }
 }
 
 function setupGep() {
@@ -108,12 +129,7 @@ function setupGep() {
     if (gameId !== MARVEL_RIVALS) { log('  not Marvel Rivals (' + MARVEL_RIVALS + '); ignoring'); return; }
     try { e.enable(); } catch (err) { log('enable() failed: ' + err); }
     log('Marvel Rivals detected — enabling events');
-    try {
-      gep.setRequiredFeatures(MARVEL_RIVALS, null);  // null = all features
-      log('setRequiredFeatures(all) requested');
-    } catch (err) {
-      log('setRequiredFeatures failed: ' + err);
-    }
+    setRequired();
   });
 
   gep.on('game-exit', (e, gameId) => {
@@ -132,6 +148,35 @@ function setupGep() {
         handleUpdate(evt, args);
       });
     } catch (_) {}
+  }
+
+  // Proactively register features now — ow-electron needs this up front so it
+  // starts tracking a game that is already running (game-detected won't fire on
+  // its own otherwise).
+  setRequired();
+}
+
+// Try the known GEP registration APIs across ow-electron versions and log which
+// one the installed runtime accepts, so detection starts regardless of version.
+function setRequired() {
+  const attempts = [
+    ['setRequiredFeatures(gameId, FEATURES)', () => gep.setRequiredFeatures(MARVEL_RIVALS, FEATURES)],
+    ['setRequiredFeatures(gameId, null)', () => gep.setRequiredFeatures(MARVEL_RIVALS, null)],
+    ['setRequiredFeatures(FEATURES)', () => gep.setRequiredFeatures(FEATURES)],
+    ['gep.registerGames([gameId])',
+      () => (typeof gep.registerGames === 'function') ? gep.registerGames([MARVEL_RIVALS]) : '(absent)'],
+  ];
+  for (const [label, fn] of attempts) {
+    try {
+      const r = fn();
+      log('register: ' + label + ' → ok' + (r && typeof r.then === 'function' ? ' (async)' : ''));
+      if (r && typeof r.then === 'function') {
+        r.then(() => log('register: ' + label + ' resolved'))
+         .catch((err) => log('register: ' + label + ' rejected: ' + err));
+      }
+    } catch (err) {
+      log('register: ' + label + ' → failed: ' + err);
+    }
   }
 }
 
