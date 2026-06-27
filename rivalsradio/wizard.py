@@ -107,7 +107,8 @@ class SetupWizard:
         self._hint(
             "RivalsRadio needs Spotify Premium and a free developer app.\n"
             "1. Open developer.spotify.com/dashboard → Create app.\n"
-            "2. Set the Redirect URI to exactly http://localhost:8888/callback.\n"
+            "2. Set the Redirect URI to exactly http://127.0.0.1:8888/callback\n"
+            "   (Spotify no longer accepts 'localhost' — use the IP 127.0.0.1).\n"
             "3. Paste the Client ID and Secret below, then Connect.")
 
         self.w_id = tk.StringVar(value=self.cfg.spotify.client_id)

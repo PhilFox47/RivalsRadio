@@ -56,7 +56,9 @@ class CaptureRegion:
 class SpotifyConfig:
     client_id: str = ""
     client_secret: str = ""
-    redirect_uri: str = "http://localhost:8888/callback"
+    # Spotify requires the loopback IP (127.0.0.1), not "localhost", in redirect
+    # URIs — and the value here must match the dashboard entry exactly.
+    redirect_uri: str = "http://127.0.0.1:8888/callback"
     # Optional: name of the device to start playback on (e.g. "DESKTOP-PC").
     # Leave blank to use whatever device is currently active in Spotify.
     device_name: str = ""
@@ -169,6 +171,12 @@ class Config:
             gep_debug=raw.get("gep_debug", False),
         )
         cfg.ensure_default_heroes()
+        # Spotify dropped support for "localhost" redirect URIs; migrate the old
+        # default to the loopback IP so existing setups keep working.
+        if cfg.spotify.redirect_uri.strip() in (
+                "http://localhost:8888/callback", "http://localhost:8888/callback/"):
+            cfg.spotify.redirect_uri = "http://127.0.0.1:8888/callback"
+            cfg.save()
         return cfg
 
     def save(self) -> None:

@@ -73,7 +73,8 @@ pip install -r requirements.txt
 
 1. Go to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard).
 2. **Create app**. Give it any name.
-3. Set the **Redirect URI** to exactly: `http://localhost:8888/callback`
+3. Set the **Redirect URI** to exactly: `http://127.0.0.1:8888/callback`
+   (Spotify rejects `localhost` — you must use the loopback IP `127.0.0.1`.)
 4. Copy the **Client ID** and **Client Secret**.
 
 ### 3. Run
