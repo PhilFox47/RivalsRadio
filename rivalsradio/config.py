@@ -106,6 +106,10 @@ class Config:
     # When true, the bridge writes every raw GEP event to gep-debug.log so the
     # exact field names can be confirmed/mapped from a live game.
     gep_debug: bool = False
+    # ow-electron packages environment. Marvel Rivals' GEP is currently served
+    # from Overwolf's DEV/QA endpoint; PROD lacks it (the package loads as an
+    # empty v0.0.0 stub). Blank = use the default (PROD).
+    gep_packages_url: str = "https://electronapi-qa.overwolf.com/packages"
 
     @property
     def references_dir(self) -> str:
@@ -169,6 +173,8 @@ class Config:
             hero_source=raw.get("hero_source", "auto"),
             gep_bridge_cmd=raw.get("gep_bridge_cmd", ""),
             gep_debug=raw.get("gep_debug", False),
+            gep_packages_url=raw.get(
+                "gep_packages_url", "https://electronapi-qa.overwolf.com/packages"),
         )
         cfg.ensure_default_heroes()
         # Spotify dropped support for "localhost" redirect URIs; migrate the old
@@ -200,6 +206,7 @@ class Config:
             "hero_source": self.hero_source,
             "gep_bridge_cmd": self.gep_bridge_cmd,
             "gep_debug": self.gep_debug,
+            "gep_packages_url": self.gep_packages_url,
         }
 
     # ----- helpers -------------------------------------------------------

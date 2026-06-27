@@ -17,10 +17,10 @@
 //
 // Marvel Rivals GEP game id (from @overwolf/ow-electron-packages-types):
 const MARVEL_RIVALS = 24890;
-// Candidate GEP features for Marvel Rivals. null = "all" on some versions; we
-// also try an explicit list since ow-electron can require named features.
-const FEATURES = ['game_info', 'match_info', 'kill', 'death', 'roster', 'me',
-                  'match_state', 'game_state'];
+// Marvel Rivals GEP features (per Overwolf's supported-games page). These are
+// feature groups — the individual info keys (roster_xx, selected_character,
+// match_outcome, …) live under them.
+const FEATURES = ['match_info', 'game_info', 'gep_internal'];
 
 const { app, BrowserWindow } = require('electron');
 const fs = require('fs');
@@ -28,6 +28,14 @@ const path = require('path');
 
 // Primary IPC: append structured messages to the events file the app tails.
 const EVENTS_LOG = process.env.RIVALSRADIO_GEP_EVENTS || '';
+
+// Point the Overwolf package manager at the right environment. Marvel Rivals'
+// GEP is currently only in the DEV/QA package endpoint, not PROD, so without
+// this the gep/overlay packages load as empty v0.0.0 stubs. Set before app-ready.
+const PACKAGES_URL = process.env.RIVALSRADIO_GEP_PACKAGES_URL || '';
+if (PACKAGES_URL) {
+  try { app.commandLine.appendSwitch('owepm-packages-url', PACKAGES_URL); } catch (_) {}
+}
 
 function out(obj) {
   const line = JSON.stringify(obj) + '\n';
@@ -77,6 +85,8 @@ app.whenReady().then(() => {
     try { fs.writeFileSync(DEBUG_LOG, `# RivalsRadio GEP debug log ${new Date().toISOString()}\n`); } catch (_) {}
   }
   log('bridge started (ow-electron ' + process.versions.electron + ')');
+  log('packages url: ' + (PACKAGES_URL || '(default/PROD)'));
+  log('argv: ' + process.argv.slice(1).join(' '));
   registerOverwolf();
 });
 
@@ -205,8 +215,13 @@ function scan(obj, depth = 0) {
   // Flat form: { feature:'match_info', key:'selected_character', value:'{...}' }
   if (obj.key === 'selected_character' && obj.value) emitHero(obj.value);
 
+  // Flat roster entry: { key:'roster_3', value:'{"is_local":true,...}' }
+  if (typeof obj.key === 'string' && obj.key.indexOf('roster') === 0 && obj.value) {
+    try { scanRoster(JSON.parse(obj.value)); } catch (_) {}
+  }
+
   scanMatch(obj);
-  scanKda(obj);
+  scanRoster(obj);
 
   for (const k of Object.keys(obj)) {
     const v = obj[k];
@@ -235,10 +250,14 @@ function scanMatch(obj) {
   }
 }
 
-// Best-effort local-player KDA from a roster entry flagged as the local player.
-function scanKda(obj) {
-  const isLocal = obj.is_local || obj.is_local_player || obj.local || obj.me;
-  if (isLocal && (obj.kills != null || obj.deaths != null || obj.assists != null)) {
+// The local player's roster entry (is_local === true) carries both the hero
+// being played and the live KDA — the authoritative source during a match.
+function scanRoster(obj) {
+  const isLocal = obj.is_local === true || obj.is_local === 'true' ||
+                  obj.is_local_player || obj.local || obj.me;
+  if (!isLocal) return;
+  if (obj.character_name || obj.name) emitHero(obj);
+  if (obj.kills != null || obj.deaths != null || obj.assists != null) {
     out({
       type: 'stats',
       kills: Number(obj.kills) || 0,

@@ -6,7 +6,7 @@
   "license": "MIT",
   "main": "src/main.js",
   "scripts": {
-    "start": "ow-electron .",
+    "start": "ow-electron . --owepm-packages-url=https://electronapi-qa.overwolf.com/packages",
     "dist": "ow-electron-builder --win --publish never"
   },
   "overwolf": {

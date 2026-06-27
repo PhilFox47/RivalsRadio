@@ -177,6 +177,14 @@ class GepHeroSource(HeroSource):
         except OSError:
             pass
         env["RIVALSRADIO_GEP_EVENTS"] = self._events_path
+        # Point ow-electron at the package environment that actually serves the
+        # game's GEP (Marvel Rivals is DEV/QA-only for now). Passed as both an
+        # env var (read in the bridge) and the documented CLI switch.
+        pkg_url = getattr(self.cfg, "gep_packages_url", "").strip()
+        if pkg_url:
+            env["RIVALSRADIO_GEP_PACKAGES_URL"] = pkg_url
+            arg = "--owepm-packages-url=" + pkg_url
+            cmd = (cmd + ["--", arg]) if cmd[0] == "npm" else (cmd + [arg])
         if getattr(self.cfg, "gep_debug", False):
             log_path = os.path.join(data_dir, "gep-debug.log")
             env["RIVALSRADIO_GEP_DEBUG"] = "1"
