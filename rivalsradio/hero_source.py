@@ -129,6 +129,8 @@ class GepHeroSource(HeroSource):
         self._proc: Optional[subprocess.Popen] = None
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
+        self._events_path: Optional[str] = None
+        self._stderr_f = None
 
     def _resolve_cmd(self) -> Optional[List[str]]:
         """Resolve the command that launches the Overwolf bridge."""
@@ -165,15 +167,29 @@ class GepHeroSource(HeroSource):
             return
         self._stop.clear()
         env = os.environ.copy()
+        data_dir = app_data_dir()
+        # The bridge communicates over a file we tail, not stdout: a packaged
+        # windowed Electron app on Windows has no usable stdout pipe, so stdout
+        # messages (hero data and status) silently vanish.
+        self._events_path = os.path.join(data_dir, "gep-events.jsonl")
+        try:
+            open(self._events_path, "w", encoding="utf-8").close()  # truncate
+        except OSError:
+            pass
+        env["RIVALSRADIO_GEP_EVENTS"] = self._events_path
         if getattr(self.cfg, "gep_debug", False):
-            log_path = os.path.join(app_data_dir(), "gep-debug.log")
+            log_path = os.path.join(data_dir, "gep-debug.log")
             env["RIVALSRADIO_GEP_DEBUG"] = "1"
             env["RIVALSRADIO_GEP_LOG"] = log_path
             on_log(f"GEP debug logging enabled → {log_path}")
+        # Capture the bridge's stderr to a file for crash diagnosis.
+        try:
+            self._stderr_f = open(os.path.join(data_dir, "gep-stderr.log"), "w", encoding="utf-8")
+        except OSError:
+            self._stderr_f = subprocess.DEVNULL
         try:
             self._proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, bufsize=1, env=env)
+                cmd, stdout=subprocess.DEVNULL, stderr=self._stderr_f, env=env)
         except Exception as exc:
             on_log(f"Failed to launch GEP bridge: {exc}")
             if on_failed:
@@ -188,29 +204,40 @@ class GepHeroSource(HeroSource):
     def _read(self, on_hero: HeroFn, on_log: LogFn,
               on_failed: Optional[FailFn] = None,
               on_event: Optional[EventFn] = None) -> None:
-        assert self._proc and self._proc.stdout
+        """Tail the bridge's events file (newline-delimited JSON)."""
         last: Optional[str] = None
-        for line in self._proc.stdout:
-            if self._stop.is_set():
-                break
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                msg = json.loads(line)
-            except json.JSONDecodeError:
-                continue  # ignore non-JSON log noise from the bridge
-            mtype = msg.get("type")
-            if mtype == "hero":
-                hero = msg.get("hero")
-                if hero and hero != last:
-                    last = hero
-                    on_hero(hero)
-            elif mtype == "log":
-                on_log(f"[bridge] {msg.get('message', '')}")
-            elif mtype in ("match", "stats") and on_event:
-                # Rich game events (match result, local KDA) for session stats.
-                on_event(msg)
+        try:
+            fh = open(self._events_path, "r", encoding="utf-8")
+        except OSError:
+            fh = None
+        try:
+            while not self._stop.is_set():
+                line = fh.readline() if fh else ""
+                if not line:
+                    if self._proc and self._proc.poll() is not None:
+                        break  # bridge exited
+                    self._stop.wait(0.2)
+                    continue
+                line = line.strip()
+                if not line or line[0] == "#":
+                    continue
+                try:
+                    msg = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                mtype = msg.get("type")
+                if mtype == "hero":
+                    hero = msg.get("hero")
+                    if hero and hero != last:
+                        last = hero
+                        on_hero(hero)
+                elif mtype == "log":
+                    on_log(f"[bridge] {msg.get('message', '')}")
+                elif mtype in ("match", "stats") and on_event:
+                    on_event(msg)
+        finally:
+            if fh:
+                fh.close()
         if not self._stop.is_set():
             on_log("GEP bridge exited.")
             if on_failed:
@@ -228,6 +255,12 @@ class GepHeroSource(HeroSource):
                 except Exception:
                     pass
             self._proc = None
+        if self._stderr_f not in (None, subprocess.DEVNULL):
+            try:
+                self._stderr_f.close()
+            except Exception:
+                pass
+        self._stderr_f = None
         self._thread = None
 
 

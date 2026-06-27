@@ -1,11 +1,14 @@
 // RivalsRadio Overwolf bridge (ow-electron).
 //
-// Subscribes to the Marvel Rivals Game Events Provider (GEP) and prints the
-// locally-played hero to stdout as JSON lines, which the RivalsRadio Python app
-// reads via its "gep" hero source:
+// Subscribes to the Marvel Rivals Game Events Provider (GEP) and writes the
+// locally-played hero (and best-effort match/KDA) as newline-delimited JSON to
+// an events file that the RivalsRadio Python app tails:
 //
 //     {"type":"hero","hero":"Jeff the Land Shark"}
 //     {"type":"log","message":"..."}
+//
+// A file is used rather than stdout because a packaged *windowed* Electron app
+// on Windows has no usable stdout pipe — stdout writes silently vanish.
 //
 // API shape follows Overwolf's official ow-electron-packages-sample:
 //   app.overwolf.packages.on('ready', ...)  -> gep package
@@ -19,15 +22,22 @@ const { app, BrowserWindow } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
+// Primary IPC: append structured messages to the events file the app tails.
+const EVENTS_LOG = process.env.RIVALSRADIO_GEP_EVENTS || '';
+
 function out(obj) {
-  try { process.stdout.write(JSON.stringify(obj) + '\n'); } catch (_) {}
+  const line = JSON.stringify(obj) + '\n';
+  if (EVENTS_LOG) {
+    try { fs.appendFileSync(EVENTS_LOG, line); } catch (_) {}
+  } else {
+    try { process.stdout.write(line); } catch (_) {}
+  }
 }
-function log(message) { out({ type: 'log', message: String(message) }); }
 
 // ---- Debug dump --------------------------------------------------------
-// When enabled, every raw GEP payload is appended to a log file so the exact
-// field names can be confirmed from a live game. Toggled by the Python app via
-// RIVALSRADIO_GEP_DEBUG / RIVALSRADIO_GEP_LOG, or by passing --debug.
+// When enabled, every raw GEP payload AND every status line is appended to a
+// log file so the exact field names / lifecycle can be confirmed from a live
+// game. Toggled by the Python app via RIVALSRADIO_GEP_DEBUG / *_LOG, or --debug.
 const DEBUG = process.env.RIVALSRADIO_GEP_DEBUG === '1' ||
               process.argv.includes('--debug');
 const DEBUG_LOG = process.env.RIVALSRADIO_GEP_LOG ||
@@ -41,8 +51,13 @@ function dbg(tag, data) {
   } catch (_) {}
 }
 
+// Status logging goes to BOTH the events file (so the app shows it) and the
+// debug log (so we have a record even if the app isn't reading).
+function log(message) { out({ type: 'log', message: String(message) }); dbg('log', String(message)); }
+
 let win = null;
 let gep = null;
+let gepReady = false;
 let lastHero = null;
 let lastResult = null;
 
@@ -56,36 +71,46 @@ app.whenReady().then(() => {
   createWindow();
   if (DEBUG) {
     try { fs.writeFileSync(DEBUG_LOG, `# RivalsRadio GEP debug log ${new Date().toISOString()}\n`); } catch (_) {}
-    log('GEP debug logging to ' + DEBUG_LOG);
   }
+  log('bridge started (ow-electron ' + process.versions.electron + ')');
   registerOverwolf();
 });
 
 app.on('window-all-closed', () => app.quit());
 
 function registerOverwolf() {
+  log('overwolf api: ' + (app.overwolf ? 'present' : 'MISSING') +
+      ', packages: ' + (app.overwolf && app.overwolf.packages ? 'present' : 'MISSING'));
   if (!app.overwolf || !app.overwolf.packages) {
-    log('ow-electron overwolf packages unavailable — is this running under ow-electron?');
+    log('ow-electron overwolf packages unavailable — the bridge is not running under ow-electron.');
     return;
   }
   app.overwolf.packages.on('ready', (e, packageName, version) => {
+    log('package ready: ' + packageName + ' v' + version);
     if (packageName !== 'gep') return;
-    log('gep ready ' + version);
     setupGep();
   });
+  log('registered overwolf ready handler; waiting for the gep package…');
+  // Heartbeat so a stalled init is visible in the log.
+  setTimeout(() => {
+    if (!gepReady) log('still waiting for the gep package after 20s (is Overwolf installed/allowed?)');
+  }, 20000);
 }
 
 function setupGep() {
   gep = app.overwolf.packages.gep;
+  gepReady = true;
+  log('gep package ready — subscribing to game events');
 
   gep.on('game-detected', (e, gameId, name) => {
+    log('game-detected: ' + gameId + ' (' + name + ')');
     dbg('game-detected', { gameId, name });
-    if (gameId !== MARVEL_RIVALS) return;
-    e.enable();                       // opt in to this game's events
-    log('Marvel Rivals detected: ' + name);
+    if (gameId !== MARVEL_RIVALS) { log('  not Marvel Rivals (' + MARVEL_RIVALS + '); ignoring'); return; }
+    try { e.enable(); } catch (err) { log('enable() failed: ' + err); }
+    log('Marvel Rivals detected — enabling events');
     try {
-      // null = all features; or pass ['match_info'] to narrow it.
-      gep.setRequiredFeatures(MARVEL_RIVALS, null);
+      gep.setRequiredFeatures(MARVEL_RIVALS, null);  // null = all features
+      log('setRequiredFeatures(all) requested');
     } catch (err) {
       log('setRequiredFeatures failed: ' + err);
     }
@@ -99,8 +124,14 @@ function setupGep() {
 
   // Live updates. Different ow-electron versions deliver info on slightly
   // different event names; listen broadly and scan the payload.
+  let firstUpdateLogged = false;
   for (const evt of ['new-game-event', 'new-info-update', 'game-event', 'info-update']) {
-    try { gep.on(evt, (e, gameId, ...args) => handleUpdate(evt, args)); } catch (_) {}
+    try {
+      gep.on(evt, (e, gameId, ...args) => {
+        if (!firstUpdateLogged) { firstUpdateLogged = true; log('receiving GEP updates (' + evt + ')'); }
+        handleUpdate(evt, args);
+      });
+    } catch (_) {}
   }
 }
 
