@@ -132,6 +132,15 @@ function setupGep() {
     setRequired();
   });
 
+  // Fires (instead of game-detected) when the game runs elevated and we don't.
+  // Marvel Rivals uses kernel anti-cheat, so this is the common failure mode.
+  gep.on('elevated-privileges-required', (e, gameId, ...a) => {
+    dbg('elevated-privileges-required', { gameId, a });
+    out({ type: 'needs_admin' });
+    log('ELEVATED PRIVILEGES REQUIRED: the game is running as administrator. ' +
+        'Restart RivalsRadio as administrator so it can read game events.');
+  });
+
   gep.on('game-exit', (e, gameId) => {
     if (gameId === MARVEL_RIVALS) { lastHero = null; lastResult = null; log('Marvel Rivals exited'); }
   });

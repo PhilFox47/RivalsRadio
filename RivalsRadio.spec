@@ -65,4 +65,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon="assets/icon.ico",
+    # Marvel Rivals runs elevated (anti-cheat); Overwolf GEP then requires this
+    # app to be elevated too. Request admin on launch so hero detection works.
+    uac_admin=True,
 )

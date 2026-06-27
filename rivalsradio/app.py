@@ -703,6 +703,13 @@ class App:
         elif etype == "stats":
             self.session_stats.note_kda(
                 event.get("kills", 0), event.get("deaths", 0), event.get("assists", 0))
+        elif etype == "needs_admin" and not getattr(self, "_warned_admin", False):
+            self._warned_admin = True
+            messagebox.showwarning(
+                "Run as administrator",
+                "Marvel Rivals runs with anti-cheat (administrator), so RivalsRadio "
+                "must also run as administrator to read game events.\n\n"
+                "Close RivalsRadio, right-click it, and choose 'Run as administrator'.")
 
     def _update_stage(self, hero: str) -> None:
         path = self.cfg.avatar_path(hero)

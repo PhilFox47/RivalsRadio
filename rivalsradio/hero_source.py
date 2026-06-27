@@ -233,7 +233,7 @@ class GepHeroSource(HeroSource):
                         on_hero(hero)
                 elif mtype == "log":
                     on_log(f"[bridge] {msg.get('message', '')}")
-                elif mtype in ("match", "stats") and on_event:
+                elif mtype in ("match", "stats", "needs_admin") and on_event:
                     on_event(msg)
         finally:
             if fh:
