@@ -99,6 +99,7 @@ class App:
         self.status_var = tk.StringVar(value="Idle")
         self.hero_var = tk.StringVar(value="—")
         self.spotify_var = tk.StringVar(value="Not connected")
+        self.game_var = tk.StringVar(value="Not detected")
         self.source_var = tk.StringVar(value=self.cfg.hero_source)
 
         self.nav_buttons: dict = {}
@@ -218,8 +219,8 @@ class App:
         info = self._card(page)
         grid = ctk.CTkFrame(info, fg_color="transparent")
         grid.pack(fill="x", padx=18, pady=16)
-        rows = [("Monitoring", self.status_var), ("Current hero", self.hero_var),
-                ("Spotify", self.spotify_var)]
+        rows = [("Monitoring", self.status_var), ("Game", self.game_var),
+                ("Current hero", self.hero_var), ("Spotify", self.spotify_var)]
         for r, (label, var) in enumerate(rows):
             ctk.CTkLabel(grid, text=label, font=self.f_bold, text_color=MUTED,
                          width=130, anchor="w").grid(row=r, column=0, sticky="w", pady=3)
@@ -578,6 +579,8 @@ class App:
     def _refresh_status(self) -> None:
         running = self.monitor.running
         self.status_var.set("Running" if running else "Idle")
+        if not running:
+            self.game_var.set("Not detected")
         self.start_btn.configure(
             text="Stop monitoring" if running else "Start monitoring",
             **(DANGER_BTN if running else ACCENT_BTN),
@@ -706,6 +709,10 @@ class App:
         elif etype == "stats":
             self.session_stats.note_kda(
                 event.get("kills", 0), event.get("deaths", 0), event.get("assists", 0))
+        elif etype == "game":
+            running = bool(event.get("running"))
+            self.game_var.set("Running ✓" if running else "Not running")
+            self._append_log("Marvel Rivals " + ("detected and running." if running else "exited."))
         elif etype == "needs_admin" and not getattr(self, "_warned_admin", False):
             self._warned_admin = True
             messagebox.showwarning(

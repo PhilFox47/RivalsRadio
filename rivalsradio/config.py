@@ -106,10 +106,9 @@ class Config:
     # When true, the bridge writes every raw GEP event to gep-debug.log so the
     # exact field names can be confirmed/mapped from a live game.
     gep_debug: bool = False
-    # ow-electron packages environment. Marvel Rivals' GEP is currently served
-    # from Overwolf's DEV/QA endpoint; PROD lacks it (the package loads as an
-    # empty v0.0.0 stub). Blank = use the default (PROD).
-    gep_packages_url: str = "https://electronapi-qa.overwolf.com/packages"
+    # Override the ow-electron packages endpoint. Blank = Overwolf PROD (default,
+    # where Marvel Rivals is supported). Set the QA URL only for DEV-stage games.
+    gep_packages_url: str = ""
 
     @property
     def references_dir(self) -> str:
@@ -173,8 +172,7 @@ class Config:
             hero_source=raw.get("hero_source", "auto"),
             gep_bridge_cmd=raw.get("gep_bridge_cmd", ""),
             gep_debug=raw.get("gep_debug", False),
-            gep_packages_url=raw.get(
-                "gep_packages_url", "https://electronapi-qa.overwolf.com/packages"),
+            gep_packages_url=raw.get("gep_packages_url", ""),
         )
         cfg.ensure_default_heroes()
         # Spotify dropped support for "localhost" redirect URIs; migrate the old
@@ -182,6 +180,10 @@ class Config:
         if cfg.spotify.redirect_uri.strip() in (
                 "http://localhost:8888/callback", "http://localhost:8888/callback/"):
             cfg.spotify.redirect_uri = "http://127.0.0.1:8888/callback"
+            cfg.save()
+        # The QA endpoint was a dead end; default back to PROD for older configs.
+        if cfg.gep_packages_url.strip() == "https://electronapi-qa.overwolf.com/packages":
+            cfg.gep_packages_url = ""
             cfg.save()
         return cfg
 

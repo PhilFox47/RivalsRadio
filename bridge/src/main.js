@@ -70,6 +70,7 @@ function log(message) { out({ type: 'log', message: String(message) }); dbg('log
 let win = null;
 let gep = null;
 let gepReady = false;
+let gameSeen = false;
 let lastHero = null;
 let lastResult = null;
 
@@ -134,11 +135,13 @@ function setupGep() {
   log('gep package ready — subscribing to game events');
 
   gep.on('game-detected', (e, gameId, name) => {
+    gameSeen = true;
     log('game-detected: ' + gameId + ' (' + name + ')');
     dbg('game-detected', { gameId, name });
     if (gameId !== MARVEL_RIVALS) { log('  not Marvel Rivals (' + MARVEL_RIVALS + '); ignoring'); return; }
     try { e.enable(); } catch (err) { log('enable() failed: ' + err); }
-    log('Marvel Rivals detected — enabling events');
+    out({ type: 'game', running: true });
+    log('✅ Marvel Rivals detected and ENABLED — game is running');
     setRequired();
   });
 
@@ -152,7 +155,11 @@ function setupGep() {
   });
 
   gep.on('game-exit', (e, gameId) => {
-    if (gameId === MARVEL_RIVALS) { lastHero = null; lastResult = null; log('Marvel Rivals exited'); }
+    if (gameId === MARVEL_RIVALS) {
+      lastHero = null; lastResult = null;
+      out({ type: 'game', running: false });
+      log('Marvel Rivals exited');
+    }
   });
 
   gep.on('error', (e, gameId, error) => { dbg('error', String(error)); log('gep error: ' + error); });
@@ -173,6 +180,14 @@ function setupGep() {
   // starts tracking a game that is already running (game-detected won't fire on
   // its own otherwise).
   setRequired();
+
+  // Detection heartbeat: if no game shows up shortly after GEP is ready, say so.
+  setTimeout(() => {
+    if (!gameSeen) {
+      log('⚠ no game-detected 25s after GEP ready — is Marvel Rivals running? ' +
+          '(the Microsoft Store / Game Pass version is NOT supported by Overwolf)');
+    }
+  }, 25000);
 }
 
 // Try the known GEP registration APIs across ow-electron versions and log which
