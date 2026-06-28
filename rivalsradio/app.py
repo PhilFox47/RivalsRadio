@@ -240,6 +240,23 @@ class App:
         ctk.CTkLabel(src, text="auto = Overwolf GEP, automatically falls back to screen capture",
                      font=self.f_small, text_color=MUTED).pack(anchor="w", padx=18, pady=(0, 14))
 
+        # Manual hero switch — works today, no detection needed.
+        man = self._card(page, "Manual hero switch")
+        mrow = ctk.CTkFrame(man, fg_color="transparent")
+        mrow.pack(fill="x", padx=18, pady=(2, 4))
+        heroes = sorted(self.cfg.heroes) or ["—"]
+        self.manual_hero_var = tk.StringVar(value=heroes[0])
+        self.manual_menu = ctk.CTkOptionMenu(
+            mrow, values=heroes, variable=self.manual_hero_var, width=200, height=34,
+            fg_color=CARD_HI, button_color=NEUTRAL, button_hover_color=NEUTRAL_HOVER)
+        self.manual_menu.pack(side="left")
+        ctk.CTkButton(mrow, text="Switch playlist", height=34, font=self.f_bold,
+                      command=lambda: self._manual_set_hero(self.manual_hero_var.get()),
+                      **ACCENT_BTN).pack(side="left", padx=8)
+        ctk.CTkLabel(man, text="Pick your hero to switch the music now — handy on a second "
+                     "monitor while automatic detection is unavailable.",
+                     font=self.f_small, text_color=MUTED).pack(anchor="w", padx=18, pady=(0, 14))
+
         # Action buttons.
         actions = ctk.CTkFrame(page, fg_color="transparent")
         actions.pack(fill="x", padx=24, pady=(2, 8))
@@ -340,6 +357,13 @@ class App:
             ctk.CTkButton(row, text="✕", width=32, height=32, font=self.f_bold,
                           fg_color="transparent", hover_color=DANGER, text_color=MUTED,
                           command=lambda h=hero: self._remove_hero(h)).pack(side="left", padx=(2, 10))
+
+        # Keep the Status-tab manual hero dropdown in sync with the roster.
+        if hasattr(self, "manual_menu"):
+            names = sorted(self.cfg.heroes) or ["—"]
+            self.manual_menu.configure(values=names)
+            if self.manual_hero_var.get() not in names:
+                self.manual_hero_var.set(names[0])
 
     # ----- Stats page -------------------------------------------------
     def _stat_tile(self, parent, caption: str):
@@ -602,6 +626,26 @@ class App:
             self._save_heroes(silent=True)
             self.monitor.start()
         self._refresh_status()
+
+    def _manual_set_hero(self, hero: str) -> None:
+        """Manually set the current hero and switch its playlist (no detection)."""
+        if not hero or hero == "—":
+            return
+        self.hero_var.set(hero)
+        self._update_stage(hero)  # Stage + session-stats playtime
+        hc = self.cfg.heroes.get(hero)
+        playlist = hc.playlist_uri if hc else ""
+        if not playlist:
+            self._append_log(f"{hero}: no playlist mapped — add one in the Heroes tab.")
+            return
+        if not self.spotify.connected:
+            self._append_log(f"Set {hero}, but Spotify isn't connected.")
+            return
+        try:
+            self.spotify.play_playlist(playlist)
+            self._append_log(f"▶ Switched to {hero}'s playlist (manual).")
+        except Exception as exc:
+            self._append_log(f"Set {hero}, but playback failed: {exc}")
 
     def _apply_source_change(self, _value=None) -> None:
         """Persist the detection source immediately and apply it live."""
