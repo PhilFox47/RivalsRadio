@@ -87,11 +87,27 @@ app.whenReady().then(() => {
   }
   log('bridge started (ow-electron ' + process.versions.electron + ')');
   log('packages url: ' + (PACKAGES_URL || '(default/PROD)'));
+  log('app uid: ' + (process.env.OVERWOLF_APP_UID || '(none)'));
+  try { log('userData: ' + app.getPath('userData')); } catch (_) {}
   log('argv: ' + process.argv.slice(1).join(' '));
   registerOverwolf();
 });
 
 app.on('window-all-closed', () => app.quit());
+
+// Compact, safe serializer for arbitrary event args (truncated).
+function brief(args) {
+  try {
+    return args.map((a) => {
+      if (a instanceof Error) return 'Error:' + a.message;
+      if (a && typeof a === 'object') {
+        const s = JSON.stringify(a);
+        return s.length > 400 ? s.slice(0, 400) + '…' : s;
+      }
+      return String(a);
+    }).join(' | ');
+  } catch (_) { return '(unserializable)'; }
+}
 
 function registerOverwolf() {
   log('overwolf api: ' + (app.overwolf ? 'present' : 'MISSING') +
@@ -100,16 +116,34 @@ function registerOverwolf() {
     log('ow-electron overwolf packages unavailable — the bridge is not running under ow-electron.');
     return;
   }
-  app.overwolf.packages.on('ready', (e, packageName, version) => {
-    log('package ready: ' + packageName + ' v' + version);
+  const pkgs = app.overwolf.packages;
+
+  // DIAGNOSTICS: log every package-manager event so we can see download /
+  // install / error states behind a v0.0.0 stub package.
+  const PKG_EVENTS = ['ready', 'updated', 'install', 'installed', 'installing',
+    'uninstalled', 'download-progress', 'download-start', 'download-complete',
+    'failed', 'failed-to-install', 'error', 'update-state-changed',
+    'state-changed', 'package-update', 'package-state-changed'];
+  for (const ev of PKG_EVENTS) {
+    try { pkgs.on(ev, (...a) => log('pkgmgr[' + ev + ']: ' + brief(a))); } catch (_) {}
+  }
+
+  pkgs.on('ready', (e, packageName, version) => {
     if (packageName === 'gep') setupGep();
     else if (packageName === 'overlay') setupOverlay();
   });
-  log('registered overwolf ready handler; waiting for the gep package…');
-  // Heartbeat so a stalled init is visible in the log.
-  setTimeout(() => {
-    if (!gepReady) log('still waiting for the gep package after 20s (is Overwolf installed/allowed?)');
-  }, 20000);
+  log('registered overwolf handlers; pkgmgr keys: ' +
+      Object.keys(pkgs).join(',') + ' | waiting for packages…');
+
+  // Heartbeats: report package state over the first minute.
+  for (const t of [10000, 30000, 60000]) {
+    setTimeout(() => {
+      const gv = pkgs.gep ? Object.keys(pkgs.gep).length : 'n/a';
+      const ov = pkgs.overlay ? Object.keys(pkgs.overlay).length : 'n/a';
+      log(`heartbeat ${t / 1000}s: gepReady=${gepReady} gameSeen=${gameSeen} ` +
+          `gep.keys=${gv} overlay.keys=${ov}`);
+    }, t);
+  }
 }
 
 // ow-electron needs games registered for tracking; registerGames lives on the
@@ -132,7 +166,8 @@ function setupOverlay() {
 function setupGep() {
   gep = app.overwolf.packages.gep;
   gepReady = true;
-  log('gep package ready — subscribing to game events');
+  log('gep package ready — keys: ' + (gep ? Object.keys(gep).join(',') : 'none') +
+      ' — subscribing to game events');
 
   gep.on('game-detected', (e, gameId, name) => {
     gameSeen = true;
