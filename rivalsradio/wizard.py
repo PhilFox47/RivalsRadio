@@ -171,10 +171,12 @@ class SetupWizard:
     def _step_calibrate(self) -> None:
         self._title("Step 3 — Map your hero playlists")
         self._hint(
-            "Almost done! In the Heroes tab:\n\n"
-            "• Paste a Spotify playlist URI for each hero you main.\n"
-            "• Optionally set Stage art (logo + signature) and pick the two "
-            "Stage colours (main + accent) per hero.\n\n"
-            "Then press Start monitoring on the Status tab, or use the manual "
-            "hero switch to change the music instantly.\n\n"
+            "Almost done! Your Heroes list starts empty and fills itself: each "
+            "hero you play is detected and added automatically.\n\n"
+            "In the Heroes tab, for each hero that appears:\n"
+            "• Paste a Spotify playlist URI.\n"
+            "• Optionally set the art (logo + signature + portrait) and pick the "
+            "two Stage colours (main + accent).\n\n"
+            "Press Start monitoring on the Status tab and play, or use the manual "
+            "hero switch to add/select a hero instantly.\n\n"
             "Click Finish to close this wizard.")

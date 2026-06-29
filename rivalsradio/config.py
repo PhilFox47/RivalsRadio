@@ -12,25 +12,6 @@ from dataclasses import dataclass, field, fields, asdict
 from typing import Dict, Optional
 
 
-# Default roster of Marvel Rivals heroes. This is just a starting list — the UI
-# lets you add or remove heroes, and the roster auto-expands when new heroes are
-# detected, so it does not need to be perfectly complete.
-DEFAULT_HEROES = [
-    # Vanguards
-    "Captain America", "Doctor Strange", "Emma Frost", "Groot", "Hulk",
-    "Magneto", "Peni Parker", "The Thing", "Thor", "Venom",
-    # Duelists
-    "Black Panther", "Black Widow", "Hawkeye", "Hela", "Human Torch",
-    "Iron Fist", "Iron Man", "Magik", "Mister Fantastic", "Moon Knight",
-    "Namor", "Phoenix", "Psylocke", "Scarlet Witch", "Spider-Man",
-    "Squirrel Girl", "Star-Lord", "Storm", "The Punisher", "Winter Soldier",
-    "Wolverine",
-    # Strategists
-    "Adam Warlock", "Cloak & Dagger", "Invisible Woman", "Jeff the Land Shark",
-    "Loki", "Luna Snow", "Mantis", "Rocket Raccoon", "Ultron",
-]
-
-
 def app_data_dir() -> str:
     """Return (and create) a per-user directory to store config + artwork."""
     base = os.environ.get("RIVALSRADIO_HOME")
@@ -64,12 +45,20 @@ class HeroConfig:
     logo: str = ""
     # Filename (relative to signatures/) of the hero signature shown top-right.
     signature: str = ""
+    # Filename (relative to portraits/) of the hero portrait. Not shown on the
+    # Stage (yet) — used as the source for automatic colour extraction.
+    portrait: str = ""
     # Per-hero Stage colours as "#RRGGBB". main = background/glow, accent = bars.
-    # Blank = auto-extract from the logo / fall back to the theme default.
+    # Blank = auto-extract from the portrait/logo, falling back to the default.
     color_main: str = ""
     color_accent: str = ""
     # Legacy single accent (migrated into color_accent on load).
     accent: str = ""
+
+    def is_empty(self) -> bool:
+        """True if the hero has no user-set data (a bare auto-added entry)."""
+        return not any((self.playlist_uri, self.avatar, self.logo, self.signature,
+                        self.portrait, self.color_main, self.color_accent, self.accent))
 
     @classmethod
     def from_dict(cls, data: dict) -> "HeroConfig":
@@ -102,6 +91,9 @@ class Config:
     gep_packages_url: str = ""
     # Localhost port the native Overwolf app POSTs hero data to ("native" source).
     native_port: int = 8771
+    # One-time flag: the legacy pre-filled default roster has been purged so the
+    # list now auto-populates purely from detected heroes.
+    roster_purged: bool = False
 
     @property
     def avatars_dir(self) -> str:
@@ -116,6 +108,12 @@ class Config:
     @property
     def signatures_dir(self) -> str:
         d = os.path.join(app_data_dir(), "signatures")
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    @property
+    def portraits_dir(self) -> str:
+        d = os.path.join(app_data_dir(), "portraits")
         os.makedirs(d, exist_ok=True)
         return d
 
@@ -147,6 +145,12 @@ class Config:
             return None
         return os.path.join(self.signatures_dir, h.signature)
 
+    def portrait_path(self, hero: str) -> Optional[str]:
+        h = self.heroes.get(hero)
+        if not h or not h.portrait:
+            return None
+        return os.path.join(self.portraits_dir, h.portrait)
+
     # ----- persistence ---------------------------------------------------
     @classmethod
     def path(cls) -> str:
@@ -156,8 +160,8 @@ class Config:
     def load(cls) -> "Config":
         path = cls.path()
         if not os.path.exists(path):
-            cfg = cls()
-            cfg.ensure_default_heroes()
+            # Start with an empty roster — it auto-populates from detected heroes.
+            cfg = cls(roster_purged=True)
             cfg.save()
             return cfg
         with open(path, "r", encoding="utf-8") as fh:
@@ -179,8 +183,8 @@ class Config:
             gep_debug=raw.get("gep_debug", False),
             gep_packages_url=raw.get("gep_packages_url", ""),
             native_port=raw.get("native_port", 8771),
+            roster_purged=raw.get("roster_purged", False),
         )
-        cfg.ensure_default_heroes()
         cfg._migrate()
         return cfg
 
@@ -202,6 +206,13 @@ class Config:
             if h.accent and not h.color_accent:
                 h.color_accent = h.accent
                 changed = True
+        # One-time purge of the legacy pre-filled roster: drop bare, unconfigured
+        # entries so the list now auto-populates purely from detected heroes.
+        if not self.roster_purged:
+            self.heroes = {name: h for name, h in self.heroes.items()
+                           if not h.is_empty()}
+            self.roster_purged = True
+            changed = True
         if changed:
             self.save()
 
@@ -224,9 +235,5 @@ class Config:
             "gep_debug": self.gep_debug,
             "gep_packages_url": self.gep_packages_url,
             "native_port": self.native_port,
+            "roster_purged": self.roster_purged,
         }
-
-    # ----- helpers -------------------------------------------------------
-    def ensure_default_heroes(self) -> None:
-        for name in DEFAULT_HEROES:
-            self.heroes.setdefault(name, HeroConfig())

@@ -105,12 +105,14 @@ the bottom.
   press **F11** (or double-click) for fullscreen — it goes fullscreen **on the
   monitor the window is currently on** (Esc to exit).
 - **Art:** in the **Heroes tab**, click **Art…** next to a hero and pick a
-  transparent **logo** (shown centred, pulses) and a **signature** (top-right).
-  Files are copied into `~/.rivalsradio/logos/` and `~/.rivalsradio/signatures/`.
+  transparent **logo** (shown centred, pulses), a **signature** (top-right) and a
+  **portrait**. The portrait isn't shown on the Stage (yet) — it's the source for
+  automatic colour extraction. Files are copied into `~/.rivalsradio/logos/`,
+  `signatures/` and `portraits/`.
 - **Per-hero colours:** each hero has a **Main** colour (the background glow) and
   an **Accent** colour (the visualizer bars). Click the **Main** / **Accent**
   swatches in the Heroes tab to pick them. Leave them unset to auto-derive from
-  the logo.
+  the portrait/logo.
 - **Visualizer FPS:** the bars run at up to **160 FPS** for a smooth look. Set
   the target in **Settings → Stage & overlay → Visualizer FPS**.
 - **Visualizer audio:** reacts to your PC's actual audio via WASAPI loopback (the
@@ -169,8 +171,9 @@ virtual environment, installs everything, and produces `dist\RivalsRadio.exe`.
 ## Configuration storage
 
 Config and artwork live in `~/.rivalsradio/` (override with the
-`RIVALSRADIO_HOME` env var): `config.json` plus `logos/`, `signatures/` and
-`avatars/`.
+`RIVALSRADIO_HOME` env var): `config.json` plus `logos/`, `signatures/`,
+`portraits/` and `avatars/`. The hero roster starts empty and auto-populates as
+heroes are detected in-game.
 
 ## Project layout
 

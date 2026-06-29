@@ -286,10 +286,12 @@ class App:
         self._page_title(page, "Heroes")
         ctk.CTkLabel(
             page, justify="left", wraplength=760, font=self.f_small, text_color=MUTED,
-            text=("For each hero: paste the Spotify playlist URI, set the Stage art "
-                  "(logo + signature), and pick the two Stage colours — a main colour "
-                  "(background glow) and an accent colour (visualizer bars). Leave the "
-                  "colours unset to auto-extract them from the logo."),
+            text=("Heroes appear here automatically as they're detected in-game — "
+                  "start monitoring and play, and each hero you pick gets its own "
+                  "entry. For each hero: paste the Spotify playlist URI, set the art "
+                  "(logo + signature + portrait), and pick the two Stage colours — a "
+                  "main colour (background glow) and an accent colour (bars). Leave "
+                  "the colours unset to auto-extract them from the portrait/logo."),
         ).pack(anchor="w", padx=24, pady=(0, 8))
 
         self.hero_rows = ctk.CTkScrollableFrame(page, fg_color=CARD, corner_radius=14)
@@ -324,6 +326,14 @@ class App:
         self.avatar_labels.clear()
         self._rendered_hero_count = len(self.cfg.heroes)
 
+        if not self.cfg.heroes:
+            ctk.CTkLabel(
+                self.hero_rows, justify="left", font=self.f_body, text_color=MUTED,
+                text=("No heroes yet. Start monitoring and play a match — each hero "
+                      "you pick is added here automatically. You can also add one "
+                      "manually below."),
+            ).pack(anchor="w", padx=14, pady=18)
+
         for hero in sorted(self.cfg.heroes):
             hc = self.cfg.heroes[hero]
             row = ctk.CTkFrame(self.hero_rows, fg_color=CARD_HI, corner_radius=10)
@@ -335,7 +345,7 @@ class App:
             ctk.CTkEntry(row, textvariable=var, height=32, fg_color=CARD, border_width=0,
                          placeholder_text="spotify:playlist:…").pack(
                 side="left", fill="x", expand=True, padx=4, pady=8)
-            art_set = bool(hc.logo or hc.signature)
+            art_set = bool(hc.logo or hc.signature or hc.portrait)
             art_btn = ctk.CTkButton(row, text="Art ✓" if art_set else "Art…", width=64, height=32,
                                     font=self.f_small, command=lambda h=hero: self._open_hero_art(h),
                                     **(ACCENT_BTN if art_set else NEUTRAL_BTN))
@@ -717,7 +727,10 @@ class App:
             return hc.color_accent
         if hero in self._accent_cache:
             return self._accent_cache[hero]
-        path = self.cfg.logo_path(hero) or self.cfg.avatar_path(hero)
+        # Prefer the portrait for colour extraction (richest art), then the
+        # logo, then the legacy avatar.
+        path = (self.cfg.portrait_path(hero) or self.cfg.logo_path(hero)
+                or self.cfg.avatar_path(hero))
         accent = theming.extract_accent(path) if path else theming.DEFAULT_ACCENT
         self._accent_cache[hero] = accent
         return accent
@@ -796,16 +809,23 @@ class App:
             self.web_btn.configure(
                 text="Stop OBS overlay" if self.web_overlay.running else "Start OBS overlay")
 
+    _ART_HELP = {
+        "logo": "Centred on the Stage; pulses with the audio.",
+        "signature": "Shown top-right on the Stage.",
+        "portrait": "Not shown on the Stage (yet); used for automatic colours.",
+    }
+
     def _open_hero_art(self, hero: str) -> None:
-        """Per-hero Stage art: a centred logo (pulses) and a top-right signature."""
+        """Per-hero art: centred logo, top-right signature, and a portrait used
+        as the source for automatic colour extraction."""
         win = ctk.CTkToplevel(self.root)
-        win.title(f"Stage art — {hero}")
-        win.geometry("420x260")
+        win.title(f"Hero art — {hero}")
+        win.geometry("460x340")
         win.configure(fg_color=CONTENT_BG)
         win.transient(self.root)
         win.after(200, lambda: win.grab_set() if win.winfo_exists() else None)
 
-        ctk.CTkLabel(win, text=f"Stage art for {hero}", font=self.f_section,
+        ctk.CTkLabel(win, text=f"Hero art for {hero}", font=self.f_section,
                      text_color=TEXT).pack(anchor="w", padx=18, pady=(16, 2))
         ctk.CTkLabel(win, text="PNG with transparent background works best.",
                      font=self.f_small, text_color=MUTED).pack(anchor="w", padx=18, pady=(0, 10))
@@ -815,8 +835,13 @@ class App:
             cur = getattr(hc, kind, "") if hc else ""
             fr = ctk.CTkFrame(win, fg_color=CARD, corner_radius=10)
             fr.pack(fill="x", padx=18, pady=6)
-            ctk.CTkLabel(fr, text=kind.capitalize(), width=90, anchor="w", font=self.f_bold,
-                         text_color=TEXT).pack(side="left", padx=12, pady=10)
+            head = ctk.CTkFrame(fr, fg_color="transparent")
+            head.pack(side="left", padx=12, pady=8)
+            ctk.CTkLabel(head, text=kind.capitalize(), anchor="w", font=self.f_bold,
+                         text_color=TEXT).pack(anchor="w")
+            ctk.CTkLabel(head, text=self._ART_HELP.get(kind, ""), anchor="w",
+                         font=self.f_small, text_color=MUTED, wraplength=210,
+                         justify="left").pack(anchor="w")
             status = ctk.CTkLabel(fr, text="✓ set" if cur else "not set", font=self.f_small,
                                   text_color=ACCENT if cur else MUTED)
             status.pack(side="left", padx=6)
@@ -842,19 +867,27 @@ class App:
 
         row("logo")
         row("signature")
+        row("portrait")
         ctk.CTkButton(win, text="Done", height=34, font=self.f_bold,
                       command=win.destroy, **ACCENT_BTN).pack(pady=12)
 
     def _mark_art_button(self, hero: str) -> None:
         hc = self.cfg.heroes.get(hero)
-        art_set = bool(hc and (hc.logo or hc.signature))
+        art_set = bool(hc and (hc.logo or hc.signature or hc.portrait))
         btn = self.avatar_labels.get(hero)
         if btn:
             btn.configure(text="Art ✓" if art_set else "Art…",
                           **(ACCENT_BTN if art_set else NEUTRAL_BTN))
 
+    def _art_dir_for(self, kind: str) -> str:
+        return {
+            "logo": self.cfg.logos_dir,
+            "signature": self.cfg.signatures_dir,
+            "portrait": self.cfg.portraits_dir,
+        }[kind]
+
     def _choose_hero_image(self, hero: str, kind: str) -> bool:
-        """Copy a chosen image into the logos/ or signatures/ dir. Returns success."""
+        """Copy a chosen image into the logos/signatures/portraits dir."""
         path = filedialog.askopenfilename(
             title=f"Choose {kind} for {hero}",
             filetypes=[("Images", "*.png *.webp *.jpg *.jpeg"), ("All files", "*.*")],
@@ -863,7 +896,7 @@ class App:
             return False
         ext = os.path.splitext(path)[1].lower() or ".png"
         filename = f"{hero.replace(' ', '_').replace('&', 'and')}_{kind}{ext}"
-        dest_dir = self.cfg.logos_dir if kind == "logo" else self.cfg.signatures_dir
+        dest_dir = self._art_dir_for(kind)
         dest = os.path.join(dest_dir, filename)
         try:
             shutil.copyfile(path, dest)
@@ -894,7 +927,7 @@ class App:
         if not messagebox.askyesno("Remove", f"Remove {hero}?"):
             return
         for path in (self.cfg.logo_path(hero), self.cfg.signature_path(hero),
-                     self.cfg.avatar_path(hero)):
+                     self.cfg.portrait_path(hero), self.cfg.avatar_path(hero)):
             if path and os.path.exists(path):
                 try:
                     os.remove(path)
