@@ -33,10 +33,11 @@ async function poll(){try{const r=await fetch('/state');st=await r.json();
 function hx(h,f){const n=parseInt(h.slice(1),16);let r=(n>>16)&255,g=(n>>8)&255,b=n&255;
  r=Math.min(255,r*f)|0;g=Math.min(255,g*f)|0;b=Math.min(255,b*f)|0;return'rgb('+r+','+g+','+b+')';}
 function draw(){const w=cv.width,h=cv.height;ctx.clearRect(0,0,w,h);
- const g=ctx.createLinearGradient(0,0,0,h);g.addColorStop(0,hx(st.accent,0.35));g.addColorStop(1,'#05060a');
+ const mc=st.main||st.accent;
+ const g=ctx.createLinearGradient(0,0,0,h);g.addColorStop(0,hx(mc,0.9));g.addColorStop(1,'#05060a');
  ctx.fillStyle=g;ctx.fillRect(0,0,w,h);
  const rg=ctx.createRadialGradient(w/2,h*0.52,10,w/2,h*0.52,Math.min(w,h)*0.5);
- rg.addColorStop(0,hx(st.accent,0.5));rg.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=rg;ctx.fillRect(0,0,w,h);
+ rg.addColorStop(0,hx(mc,0.5));rg.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=rg;ctx.fillRect(0,0,w,h);
  if(avatar.complete&&avatar.naturalWidth){const th=h*0.82,r=th/avatar.naturalHeight;
   let tw=avatar.naturalWidth*r;ctx.drawImage(avatar,(w-tw)/2,h*0.54-th/2+h*0.04,tw,th);}
  ctx.textAlign='center';ctx.fillStyle='#fff';ctx.font='bold '+(h*0.075)+'px Segoe UI';

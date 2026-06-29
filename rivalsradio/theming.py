@@ -30,6 +30,13 @@ def scale(rgb: Tuple[int, int, int], factor: float) -> Tuple[int, int, int]:
     return tuple(max(0, min(255, int(c * factor))) for c in rgb)  # type: ignore
 
 
+def darken(hex_value: str, factor: float = 0.45) -> str:
+    """Return a darker shade of a "#RRGGBB" colour (factor in [0, 1])."""
+    if not is_valid_hex(hex_value):
+        hex_value = DEFAULT_ACCENT
+    return rgb_to_hex(scale(hex_to_rgb(hex_value), factor))
+
+
 def is_valid_hex(value: str) -> bool:
     v = value.lstrip("#")
     if len(v) != 6:

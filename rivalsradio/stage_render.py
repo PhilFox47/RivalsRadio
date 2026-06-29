@@ -26,9 +26,16 @@ def screen_blend(base: Image.Image, glow: Image.Image) -> Image.Image:
 
 
 def render_background(w: int, h: int, accent: Tuple[int, int, int],
-                      avatar: Optional[Image.Image]) -> Image.Image:
-    """Build the static Stage background: gradient + accent glow + avatar."""
-    dark = theming.scale(accent, 0.16)
+                      avatar: Optional[Image.Image],
+                      main: Optional[Tuple[int, int, int]] = None) -> Image.Image:
+    """Build the static Stage background: gradient + glow + (optional) avatar.
+
+    ``main`` drives the background gradient and glow; ``accent`` is kept for the
+    callers that colour the bars. If ``main`` is omitted it falls back to
+    ``accent`` so older callers keep working.
+    """
+    glow_col = main if main is not None else accent
+    dark = theming.scale(glow_col, 0.16)
     top_col = theming.mix(BG_BOTTOM, dark, 0.9)
 
     # Work out a capped render size for the smooth layers.
@@ -51,7 +58,7 @@ def render_background(w: int, h: int, accent: Tuple[int, int, int],
     gd = ImageDraw.Draw(glow)
     cx, cy = rw // 2, int(rh * 0.52)
     rr = max(1, int(min(rw, rh) * 0.42))
-    gd.ellipse([cx - rr, cy - rr, cx + rr, cy + rr], fill=theming.scale(accent, 0.5))
+    gd.ellipse([cx - rr, cy - rr, cx + rr, cy + rr], fill=theming.scale(glow_col, 0.5))
     glow = glow.filter(ImageFilter.GaussianBlur(max(1, rr // 2)))
     bg = screen_blend(bg, glow)
 

@@ -9,15 +9,12 @@ import sys
 import threading
 import time
 import tkinter as tk
-from tkinter import messagebox, filedialog
+from tkinter import messagebox, filedialog, colorchooser
 
 import customtkinter as ctk
 
-from . import theming, gamewindow
+from . import theming
 from .config import Config, HeroConfig, app_data_dir
-from .capture import ScreenGrabber
-from .recognizer import save_reference
-from .region_selector import select_region
 from .spotify_controller import SpotifyController
 from .monitor import Monitor
 from .audio_visualizer import AudioVisualizer
@@ -230,14 +227,15 @@ class App:
         # Detection source as a modern segmented control.
         src = self._card(page, "Detection source")
         seg = ctk.CTkSegmentedButton(
-            src, values=["auto", "gep", "native", "screen"], variable=self.source_var,
+            src, values=["native", "gep"], variable=self.source_var,
             command=self._apply_source_change, font=self.f_bold,
             selected_color=ACCENT, selected_hover_color=ACCENT_HOVER,
             unselected_color=CARD_HI, unselected_hover_color=NEUTRAL_HOVER,
             text_color=TEXT, height=34,
         )
         seg.pack(anchor="w", padx=18, pady=(4, 4))
-        ctk.CTkLabel(src, text="auto = Overwolf GEP, automatically falls back to screen capture",
+        ctk.CTkLabel(src, text="native = companion Overwolf app over localhost · "
+                     "gep = ow-electron bridge",
                      font=self.f_small, text_color=MUTED).pack(anchor="w", padx=18, pady=(0, 14))
 
         # Manual hero switch — works today, no detection needed.
@@ -265,10 +263,8 @@ class App:
         self.start_btn.pack(side="left")
         ctk.CTkButton(actions, text="Connect Spotify", height=40, font=self.f_bold,
                       command=self._connect_spotify, **NEUTRAL_BTN).pack(side="left", padx=8)
-        ctk.CTkButton(actions, text="Test detection", height=40, font=self.f_bold,
-                      command=self._test_detection, **NEUTRAL_BTN).pack(side="left")
         ctk.CTkButton(actions, text="Open Stage view", height=40, font=self.f_bold,
-                      command=self._open_stage, **NEUTRAL_BTN).pack(side="left", padx=8)
+                      command=self._open_stage, **NEUTRAL_BTN).pack(side="left")
 
         # Activity log.
         log_card = self._card(page, "Activity log", fill="both", expand=True, pady=(10, 24))
@@ -290,17 +286,19 @@ class App:
         self._page_title(page, "Heroes")
         ctk.CTkLabel(
             page, justify="left", wraplength=760, font=self.f_small, text_color=MUTED,
-            text=("For each hero: paste the Spotify playlist URI, and (in a match on that "
-                  "hero) click Capture to record its HUD. Set an Avatar for the Stage view; "
-                  "the accent colour is read from it automatically, or type a #hex override."),
+            text=("For each hero: paste the Spotify playlist URI, set the Stage art "
+                  "(logo + signature), and pick the two Stage colours — a main colour "
+                  "(background glow) and an accent colour (visualizer bars). Leave the "
+                  "colours unset to auto-extract them from the logo."),
         ).pack(anchor="w", padx=24, pady=(0, 8))
 
         self.hero_rows = ctk.CTkScrollableFrame(page, fg_color=CARD, corner_radius=14)
         self.hero_rows.pack(fill="both", expand=True, padx=24, pady=4)
 
         self.playlist_vars = {}
-        self.accent_vars = {}
-        self.ref_labels = {}
+        self.color_main_vars = {}
+        self.color_accent_vars = {}
+        self.color_swatches = {}  # hero -> (main_btn, accent_btn)
         self.avatar_labels = {}
         self._render_hero_rows()
 
@@ -320,8 +318,9 @@ class App:
         for child in self.hero_rows.winfo_children():
             child.destroy()
         self.playlist_vars.clear()
-        self.accent_vars.clear()
-        self.ref_labels.clear()
+        self.color_main_vars.clear()
+        self.color_accent_vars.clear()
+        self.color_swatches.clear()
         self.avatar_labels.clear()
         self._rendered_hero_count = len(self.cfg.heroes)
 
@@ -336,23 +335,22 @@ class App:
             ctk.CTkEntry(row, textvariable=var, height=32, fg_color=CARD, border_width=0,
                          placeholder_text="spotify:playlist:…").pack(
                 side="left", fill="x", expand=True, padx=4, pady=8)
-            ctk.CTkButton(row, text="Capture", width=72, height=32, font=self.f_small,
-                          command=lambda h=hero: self._capture_reference(h),
-                          **NEUTRAL_BTN).pack(side="left", padx=2)
-            ref_lbl = ctk.CTkLabel(row, text="✓" if hc.reference else "—", width=16,
-                                   text_color=ACCENT if hc.reference else MUTED, font=self.f_bold)
-            ref_lbl.pack(side="left", padx=(2, 4))
-            self.ref_labels[hero] = ref_lbl
             art_set = bool(hc.logo or hc.signature)
             art_btn = ctk.CTkButton(row, text="Art ✓" if art_set else "Art…", width=64, height=32,
                                     font=self.f_small, command=lambda h=hero: self._open_hero_art(h),
                                     **(ACCENT_BTN if art_set else NEUTRAL_BTN))
             art_btn.pack(side="left", padx=2)
             self.avatar_labels[hero] = art_btn  # reused dict: hero -> art button
-            acc = tk.StringVar(value=hc.accent)
-            self.accent_vars[hero] = acc
-            ctk.CTkEntry(row, textvariable=acc, width=80, height=32, fg_color=CARD,
-                         border_width=0, placeholder_text="#hex").pack(side="left", padx=2)
+
+            # Two per-hero colour swatches: main (glow) and accent (bars).
+            self.color_main_vars[hero] = tk.StringVar(value=hc.color_main)
+            self.color_accent_vars[hero] = tk.StringVar(value=hc.color_accent)
+            main_btn = self._color_swatch(row, hero, "main")
+            main_btn.pack(side="left", padx=(6, 2))
+            accent_btn = self._color_swatch(row, hero, "accent")
+            accent_btn.pack(side="left", padx=2)
+            self.color_swatches[hero] = (main_btn, accent_btn)
+
             ctk.CTkButton(row, text="✕", width=32, height=32, font=self.f_bold,
                           fg_color="transparent", hover_color=DANGER, text_color=MUTED,
                           command=lambda h=hero: self._remove_hero(h)).pack(side="left", padx=(2, 10))
@@ -363,6 +361,52 @@ class App:
             self.manual_menu.configure(values=names)
             if self.manual_hero_var.get() not in names:
                 self.manual_hero_var.set(names[0])
+
+    def _color_swatch(self, parent, hero: str, kind: str):
+        """A small colour button (main/accent) that opens a colour picker."""
+        var = (self.color_main_vars if kind == "main" else self.color_accent_vars)[hero]
+        value = var.get().strip()
+        label = "Main" if kind == "main" else "Accent"
+        btn = ctk.CTkButton(
+            parent, text=label, width=66, height=32, font=self.f_small,
+            text_color=self._swatch_ink(value),
+            fg_color=value if theming.is_valid_hex(value) else CARD,
+            hover_color=value if theming.is_valid_hex(value) else NEUTRAL_HOVER,
+            border_width=1, border_color=NEUTRAL,
+            command=lambda h=hero, k=kind: self._pick_color(h, k))
+        return btn
+
+    @staticmethod
+    def _swatch_ink(hex_value: str) -> str:
+        """Pick black/white text for legibility on a coloured swatch."""
+        if not theming.is_valid_hex(hex_value):
+            return TEXT
+        h = hex_value.lstrip("#")
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return "#000000" if (0.299 * r + 0.587 * g + 0.114 * b) > 150 else "#ffffff"
+
+    def _pick_color(self, hero: str, kind: str) -> None:
+        var = (self.color_main_vars if kind == "main" else self.color_accent_vars)[hero]
+        current = var.get().strip() or None
+        rgb, hex_value = colorchooser.askcolor(
+            color=current if theming.is_valid_hex(current or "") else None,
+            title=f"{kind.capitalize()} colour — {hero}", parent=self.root)
+        if not hex_value:
+            return
+        hex_value = hex_value.lower()
+        var.set(hex_value)
+        btn = self.color_swatches.get(hero, (None, None))[0 if kind == "main" else 1]
+        if btn:
+            btn.configure(fg_color=hex_value, hover_color=hex_value,
+                          text_color=self._swatch_ink(hex_value))
+        # Persist immediately and refresh the Stage if this hero is showing.
+        field = "color_main" if kind == "main" else "color_accent"
+        if hero in self.cfg.heroes:
+            setattr(self.cfg.heroes[hero], field, hex_value)
+            self.cfg.save()
+        self._accent_cache.pop(hero, None)
+        if self.hero_var.get() == hero:
+            self._update_stage(hero)
 
     # ----- Stats page -------------------------------------------------
     def _stat_tile(self, parent, caption: str):
@@ -458,7 +502,7 @@ class App:
         # Detection source.
         df = self._card(scroll, "Hero detection source")
         ctk.CTkSegmentedButton(
-            df, values=["auto", "gep", "native", "screen"], variable=self.source_var,
+            df, values=["native", "gep"], variable=self.source_var,
             command=self._apply_source_change, font=self.f_bold,
             selected_color=ACCENT, selected_hover_color=ACCENT_HOVER,
             unselected_color=CARD_HI, unselected_hover_color=NEUTRAL_HOVER,
@@ -477,28 +521,16 @@ class App:
         ctk.CTkLabel(df, text=f"Writes to {os.path.join(app_data_dir(), 'gep-debug.log')}",
                      font=self.f_small, text_color=MUTED).pack(anchor="w", padx=18, pady=(0, 14))
 
-        # Capture region.
-        cf = self._card(scroll, "HUD capture region")
-        self.region_var = tk.StringVar()
-        ctk.CTkLabel(cf, textvariable=self.region_var, font=self.f_body,
-                     text_color=MUTED).pack(anchor="w", padx=18, pady=(2, 6))
-        rbtns = ctk.CTkFrame(cf, fg_color="transparent")
-        rbtns.pack(anchor="w", padx=18, pady=(0, 14))
-        ctk.CTkButton(rbtns, text="Auto-detect game", height=34, font=self.f_small,
-                      command=self._auto_find_region, **NEUTRAL_BTN).pack(side="left")
-        ctk.CTkButton(rbtns, text="Select region…", height=34, font=self.f_small,
-                      command=self._select_region, **NEUTRAL_BTN).pack(side="left", padx=8)
-        ctk.CTkButton(rbtns, text="Preview", height=34, font=self.f_small,
-                      command=self._preview_region, **NEUTRAL_BTN).pack(side="left")
-
         # Stage & overlay.
         pf = self._card(scroll, "Stage & overlay")
-        srow = ctk.CTkFrame(pf, fg_color="transparent")
-        srow.pack(fill="x", padx=18, pady=6)
-        ctk.CTkLabel(srow, text="Visualizer style", font=self.f_body, text_color=MUTED,
+        frow = ctk.CTkFrame(pf, fg_color="transparent")
+        frow.pack(fill="x", padx=18, pady=6)
+        ctk.CTkLabel(frow, text="Visualizer FPS", font=self.f_body, text_color=MUTED,
                      width=170, anchor="w").pack(side="left")
-        self.style_var = tk.StringVar(value=self.cfg.stage_style)
-        ctk.CTkOptionMenu(srow, values=["bars", "mirror", "radial"], variable=self.style_var,
+        self.fps_var = tk.IntVar(value=self.cfg.stage_fps)
+        ctk.CTkOptionMenu(frow, values=["60", "90", "120", "144", "160"],
+                          variable=tk.StringVar(value=str(self.cfg.stage_fps)),
+                          command=lambda v: self.fps_var.set(int(v)),
                           width=140, height=34, fg_color=CARD_HI, button_color=NEUTRAL,
                           button_hover_color=NEUTRAL_HOVER).pack(side="left")
         self.nowplaying_var = tk.BooleanVar(value=self.cfg.show_now_playing)
@@ -516,20 +548,8 @@ class App:
             height=34, font=self.f_small, command=self._toggle_web_overlay, **NEUTRAL_BTN)
         self.web_btn.pack(anchor="w", padx=18, pady=(8, 14))
 
-        # Tuning.
-        tf = self._card(scroll, "Detection tuning")
-        self.threshold_var = tk.DoubleVar(value=self.cfg.match_threshold)
-        self.interval_var = tk.DoubleVar(value=self.cfg.poll_interval)
-        self.confirm_var = tk.IntVar(value=self.cfg.confirm_count)
-        self._labeled_entry(tf, "Match threshold (0–1)", self.threshold_var)
-        self._labeled_entry(tf, "Poll interval (s)", self.interval_var)
-        self._labeled_entry(tf, "Confirm count", self.confirm_var)
-        ctk.CTkFrame(tf, fg_color="transparent", height=8).pack()
-
         ctk.CTkButton(scroll, text="Save settings", height=40, width=170, font=self.f_bold,
                       command=self._save_settings, **ACCENT_BTN).pack(pady=18)
-
-        self._update_region_label()
 
     # --------------------------------------------------------------- actions
     def _enqueue_log(self, message: str) -> None:
@@ -577,11 +597,16 @@ class App:
         for hero, var in self.playlist_vars.items():
             if hero in self.cfg.heroes:
                 self.cfg.heroes[hero].playlist_uri = var.get().strip()
-        for hero, var in self.accent_vars.items():
+        for hero, var in self.color_main_vars.items():
             if hero in self.cfg.heroes:
                 value = var.get().strip()
                 if not value or theming.is_valid_hex(value):
-                    self.cfg.heroes[hero].accent = value
+                    self.cfg.heroes[hero].color_main = value
+        for hero, var in self.color_accent_vars.items():
+            if hero in self.cfg.heroes:
+                value = var.get().strip()
+                if not value or theming.is_valid_hex(value):
+                    self.cfg.heroes[hero].color_accent = value
         self.cfg.save()
 
     def _append_log(self, message: str) -> None:
@@ -685,50 +710,25 @@ class App:
 
         threading.Thread(target=worker, name="spotify-connect", daemon=True).start()
 
-    def _test_detection(self) -> None:
-        if not self.cfg.capture_region.is_valid():
-            messagebox.showwarning("Test", "Set the HUD capture region first.")
-            return
-        refs = self.cfg.heroes_with_references()
-        if not refs:
-            messagebox.showinfo("Test", "No calibrated heroes yet. Capture some first.")
-            return
-        try:
-            grabber = ScreenGrabber()
-            frame = grabber.grab(self.cfg.capture_region)
-            grabber.close()
-        except Exception as exc:
-            messagebox.showerror("Test", f"Screen capture failed:\n{exc}")
-            return
-        from .recognizer import HeroRecognizer
-        recognizer = HeroRecognizer()
-        recognizer.load_references(refs)
-        ranked = recognizer.rank_matches(frame)[:3]
-        thr = self.cfg.match_threshold
-        lines = []
-        for i, (hero, score) in enumerate(ranked):
-            mark = "✓" if (i == 0 and score >= thr) else " "
-            lines.append(f"  {mark} {hero}: {score:.3f}")
-        verdict = (
-            f"Would switch to: {ranked[0][0]}"
-            if ranked and ranked[0][1] >= thr
-            else f"No confident match (threshold {thr:.2f})"
-        )
-        self._append_log("Test detection — " + verdict)
-        for line in lines:
-            self._append_log(line)
-
     # ----- Stage (second screen) -------------------------------------
     def _effective_accent(self, hero: str) -> str:
         hc = self.cfg.heroes.get(hero)
-        if hc and hc.accent and theming.is_valid_hex(hc.accent):
-            return hc.accent
+        if hc and hc.color_accent and theming.is_valid_hex(hc.color_accent):
+            return hc.color_accent
         if hero in self._accent_cache:
             return self._accent_cache[hero]
         path = self.cfg.logo_path(hero) or self.cfg.avatar_path(hero)
         accent = theming.extract_accent(path) if path else theming.DEFAULT_ACCENT
         self._accent_cache[hero] = accent
         return accent
+
+    def _effective_main(self, hero: str) -> str:
+        """Main (background-glow) colour: explicit override, else a deep tone
+        derived from the accent."""
+        hc = self.cfg.heroes.get(hero)
+        if hc and hc.color_main and theming.is_valid_hex(hc.color_main):
+            return hc.color_main
+        return theming.darken(self._effective_accent(hero), 0.45)
 
     def _open_stage(self) -> None:
         if self.stage and self.stage.alive:
@@ -766,10 +766,12 @@ class App:
 
     def _update_stage(self, hero: str) -> None:
         accent = self._effective_accent(hero)
+        main = self._effective_main(hero)
         self.state.set_hero(
             hero, self.cfg.avatar_path(hero), accent,
             logo_path=self.cfg.logo_path(hero),
-            signature_path=self.cfg.signature_path(hero))
+            signature_path=self.cfg.signature_path(hero),
+            main_hex=main)
         playlist = self.cfg.heroes[hero].playlist_uri if hero in self.cfg.heroes else ""
         self.session_stats.note_hero(hero, playlist)
 
@@ -876,29 +878,6 @@ class App:
             self._update_stage(hero)
         return True
 
-    def _capture_reference(self, hero: str) -> None:
-        if not self.cfg.capture_region.is_valid():
-            messagebox.showwarning(
-                "No region", "Set the HUD capture region in Settings first.")
-            return
-        try:
-            grabber = ScreenGrabber()
-            frame = grabber.grab(self.cfg.capture_region)
-            grabber.close()
-        except Exception as exc:
-            messagebox.showerror("Capture", f"Screen capture failed:\n{exc}")
-            return
-        if frame is None:
-            messagebox.showerror("Capture", "Captured an empty frame.")
-            return
-        filename = f"{hero.replace(' ', '_').replace('&', 'and')}.png"
-        path = os.path.join(self.cfg.references_dir, filename)
-        save_reference(frame, path)
-        self.cfg.heroes[hero].reference = filename
-        self.cfg.save()
-        self.ref_labels[hero].configure(text="✓", text_color=ACCENT)
-        self._append_log(f"Captured HUD reference for {hero}.")
-
     def _add_hero(self) -> None:
         name = self.new_hero_var.get().strip()
         if not name:
@@ -914,7 +893,8 @@ class App:
     def _remove_hero(self, hero: str) -> None:
         if not messagebox.askyesno("Remove", f"Remove {hero}?"):
             return
-        for path in (self.cfg.reference_path(hero), self.cfg.avatar_path(hero)):
+        for path in (self.cfg.logo_path(hero), self.cfg.signature_path(hero),
+                     self.cfg.avatar_path(hero)):
             if path and os.path.exists(path):
                 try:
                     os.remove(path)
@@ -928,55 +908,19 @@ class App:
     def _save_heroes(self, silent: bool = False) -> None:
         for hero, var in self.playlist_vars.items():
             self.cfg.heroes[hero].playlist_uri = var.get().strip()
-        for hero, var in self.accent_vars.items():
-            value = var.get().strip()
-            if value and not theming.is_valid_hex(value):
-                messagebox.showwarning(
-                    "Accent", f"'{value}' for {hero} is not a valid #RRGGBB colour.")
-                return
-            self.cfg.heroes[hero].accent = value
-            self._accent_cache.pop(hero, None)
+        for field, vars_map in (("color_main", self.color_main_vars),
+                                ("color_accent", self.color_accent_vars)):
+            for hero, var in vars_map.items():
+                value = var.get().strip()
+                if value and not theming.is_valid_hex(value):
+                    messagebox.showwarning(
+                        "Colour", f"'{value}' for {hero} is not a valid #RRGGBB colour.")
+                    return
+                setattr(self.cfg.heroes[hero], field, value)
+                self._accent_cache.pop(hero, None)
         self.cfg.save()
         if not silent:
-            self._append_log("Saved hero mappings (playlists + accents).")
-
-    def _select_region(self) -> None:
-        region = select_region(self.root)
-        if region:
-            self.cfg.capture_region = region
-            self.cfg.save()
-            self._update_region_label()
-            self._append_log(
-                f"Capture region set: {region.width}×{region.height} "
-                f"at ({region.left}, {region.top})."
-            )
-
-    def _update_region_label(self) -> None:
-        r = self.cfg.capture_region
-        if r.is_valid():
-            self.region_var.set(f"{r.width}×{r.height} at ({r.left}, {r.top})")
-        else:
-            self.region_var.set("Not set")
-
-    def _preview_region(self) -> None:
-        if not self.cfg.capture_region.is_valid():
-            messagebox.showwarning("Preview", "Set a region first.")
-            return
-        try:
-            from PIL import Image, ImageTk
-            grabber = ScreenGrabber()
-            frame = grabber.grab(self.cfg.capture_region)
-            grabber.close()
-            rgb = frame[:, :, ::-1]
-            img = Image.fromarray(rgb)
-            win = ctk.CTkToplevel(self.root)
-            win.title("Region preview")
-            photo = ImageTk.PhotoImage(img)
-            lbl = tk.Label(win, image=photo, bd=0)
-            lbl.image = photo
-            lbl.pack()
-        except Exception as exc:
-            messagebox.showerror("Preview", f"Preview failed:\n{exc}")
+            self._append_log("Saved hero mappings (playlists + colours).")
 
     def _save_settings(self, silent: bool = False) -> None:
         self.cfg.spotify.client_id = self.client_id_var.get().strip()
@@ -984,48 +928,27 @@ class App:
         self.cfg.spotify.redirect_uri = self.redirect_var.get().strip()
         self.cfg.spotify.device_name = self.device_var.get().strip()
         try:
-            self.cfg.match_threshold = float(self.threshold_var.get())
-            self.cfg.poll_interval = float(self.interval_var.get())
-            self.cfg.confirm_count = int(self.confirm_var.get())
+            self.cfg.stage_fps = int(self.fps_var.get())
             self.cfg.web_overlay_port = int(self.web_port_var.get())
         except (tk.TclError, ValueError):
             messagebox.showwarning("Settings", "Numeric fields must be numbers.")
             return
-        self.cfg.stage_style = self.style_var.get()
         self.cfg.show_now_playing = bool(self.nowplaying_var.get())
         self.cfg.hero_source = self.source_var.get()
         self.cfg.gep_bridge_cmd = self.bridge_cmd_var.get().strip()
         self.cfg.gep_packages_url = self.pkg_url_var.get().strip()
         self.cfg.gep_debug = bool(self.gep_debug_var.get())
         self.cfg.save()
+        # Apply the new FPS to a live Stage immediately.
+        if self.stage and self.stage.alive:
+            self.stage.set_fps(self.cfg.stage_fps)
         if not silent:
             self._append_log("Settings saved.")
-
-    def _auto_find_region(self) -> None:
-        if not gamewindow.backend_available():
-            messagebox.showinfo(
-                "Auto-detect", "Window detection needs the 'pygetwindow' package "
-                "(included in the Windows build).")
-            return
-        rect = gamewindow.find_game_rect(self.cfg.game_window_title)
-        if not rect:
-            messagebox.showinfo(
-                "Auto-detect",
-                f"Couldn't find a window matching '{self.cfg.game_window_title}'. "
-                "Make sure Marvel Rivals is running.")
-            return
-        self.cfg.capture_region = gamewindow.suggest_hud_region(rect)
-        self.cfg.save()
-        self._update_region_label()
-        self._append_log(
-            "Auto-detected game window; suggested a HUD region. "
-            "Use Preview / Select region to fine-tune, then re-capture references.")
 
     def refresh_widgets_from_config(self) -> None:
         self.client_id_var.set(self.cfg.spotify.client_id)
         self.client_secret_var.set(self.cfg.spotify.client_secret)
         self.redirect_var.set(self.cfg.spotify.redirect_uri)
-        self._update_region_label()
         self._refresh_status()
 
     def _on_close(self) -> None:
@@ -1038,7 +961,26 @@ class App:
         self.root.destroy()
 
 
+def _enable_dpi_awareness() -> None:
+    """Make the process per-monitor DPI aware so windows fill scaled monitors.
+
+    On a 150%/200%-scaled display a DPI-unaware window is bitmap-stretched and
+    its content ends up occupying only a fraction of the screen when maximised
+    or fullscreened. Declaring per-monitor-v2 awareness makes Tk geometry map to
+    physical pixels. Harmless / no-op off Windows."""
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        import ctypes
+        # PER_MONITOR_AWARE_V2 = -4
+        if not ctypes.windll.user32.SetProcessDpiAwarenessContext(-4):
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PER_MONITOR_AWARE
+    except Exception:
+        pass
+
+
 def main() -> None:
+    _enable_dpi_awareness()
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("green")
     root = ctk.CTk()

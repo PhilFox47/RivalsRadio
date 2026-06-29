@@ -19,10 +19,14 @@ import numpy as np
 
 class AudioVisualizer:
     def __init__(self, bands: int = 56, samplerate: int = 48000,
-                 blocksize: int = 2048) -> None:
+                 blocksize: int = 2048, hop: int = 256) -> None:
         self.bands = bands
         self.samplerate = samplerate
         self.blocksize = blocksize
+        # Capture in small hops but FFT over the full block (rolling buffer) so
+        # the spectrum updates ~samplerate/hop times a second (e.g. 48000/256 ≈
+        # 187 Hz) instead of once per block (~23 Hz) — smooth, high-FPS bars.
+        self.hop = hop
 
         self._spectrum = np.zeros(bands, dtype=np.float32)
         self._lock = threading.Lock()
@@ -88,17 +92,22 @@ class AudioVisualizer:
             return
 
         smoothed = np.zeros(self.bands, dtype=np.float32)
+        buf = np.zeros(self.blocksize, dtype=np.float32)   # rolling FFT window
         # Running peak for auto-gain so quiet and loud tracks both look good.
         peak = 1e-6
         try:
             with mic.recorder(samplerate=self.samplerate, channels=1,
-                              blocksize=self.blocksize) as rec:
+                              blocksize=self.hop) as rec:
                 while not self._stop.is_set():
-                    data = rec.record(numframes=self.blocksize)
+                    data = rec.record(numframes=self.hop)
                     mono = data[:, 0] if data.ndim > 1 else data
-                    if mono.shape[0] < self.blocksize:
-                        mono = np.pad(mono, (0, self.blocksize - mono.shape[0]))
-                    mag = np.abs(np.fft.rfft(mono * self._window))
+                    m = mono.shape[0]
+                    if m >= self.blocksize:
+                        buf = mono[-self.blocksize:].astype(np.float32)
+                    elif m > 0:
+                        buf = np.roll(buf, -m)
+                        buf[-m:] = mono
+                    mag = np.abs(np.fft.rfft(buf * self._window))
 
                     raw = np.empty(self.bands, dtype=np.float32)
                     for i, idx in enumerate(self._band_idx):
@@ -109,12 +118,14 @@ class AudioVisualizer:
                     peak = max(peak * 0.999, float(raw.max()), 1e-6)
                     norm = np.clip(raw / peak, 0.0, 1.0)
 
-                    # Asymmetric smoothing: snappy attack, gentle decay.
+                    # Asymmetric smoothing: snappy attack, gentle decay. Factors
+                    # are tuned for the high (~hop) update rate so it stays fluid
+                    # rather than twitchy.
                     rise = norm > smoothed
                     smoothed = np.where(
                         rise,
-                        smoothed + (norm - smoothed) * 0.6,
-                        smoothed + (norm - smoothed) * 0.18,
+                        smoothed + (norm - smoothed) * 0.28,
+                        smoothed + (norm - smoothed) * 0.06,
                     ).astype(np.float32)
 
                     with self._lock:

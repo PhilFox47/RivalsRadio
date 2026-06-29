@@ -16,11 +16,9 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=ctk_datas,
-    # spotipy/cv2/mss are imported lazily in places; list them so PyInstaller's
-    # static analysis definitely bundles them.
+    # spotipy is imported lazily in places; list these so PyInstaller's static
+    # analysis definitely bundles them.
     hiddenimports=[
-        "mss",
-        "cv2",
         "numpy",
         "PIL",
         "PIL.ImageTk",
@@ -28,7 +26,6 @@ a = Analysis(
         "spotipy.oauth2",
         "soundcard",
         "cffi",
-        "pygetwindow",
         "customtkinter",
         "darkdetect",
     ],

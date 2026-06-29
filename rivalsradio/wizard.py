@@ -1,4 +1,4 @@
-"""First-run setup wizard: Spotify -> capture region -> calibration pointer."""
+"""First-run setup wizard: Spotify -> detection -> hero playlists pointer."""
 
 from __future__ import annotations
 
@@ -6,9 +6,6 @@ import tkinter as tk
 from tkinter import messagebox
 
 import customtkinter as ctk
-
-from . import gamewindow
-from .region_selector import select_region
 
 ACCENT = "#1DB954"
 ACCENT_HOVER = "#1ed760"
@@ -29,7 +26,7 @@ class SetupWizard:
         self.app = app
         self.cfg = app.cfg
         self.step = 0
-        self.steps = [self._step_spotify, self._step_region, self._step_calibrate]
+        self.steps = [self._step_spotify, self._step_detection, self._step_calibrate]
 
         self.f_h = ctk.CTkFont(size=18, weight="bold")
         self.f_body = ctk.CTkFont(size=13)
@@ -156,60 +153,28 @@ class SetupWizard:
         import threading
         threading.Thread(target=worker, name="spotify-connect", daemon=True).start()
 
-    def _step_region(self) -> None:
-        self._title("Step 2 — Set the HUD capture region")
+    def _step_detection(self) -> None:
+        self._title("Step 2 — Hero detection (Overwolf)")
         self._hint(
-            "RivalsRadio reads a small part of your screen to tell which hero "
-            "you're on. With Marvel Rivals running, auto-detect the window for a "
-            "suggested region, then fine-tune by dragging a tight box around the "
-            "hero portrait in the bottom-left corner (your hero's face). It's a "
-            "steadier anchor than the ability icons, which change with cooldowns.")
-
-        ctk.CTkButton(self.body, text="Auto-detect game window", height=36, font=self.f_bold,
-                      command=self._auto_region, **NEUTRAL_BTN).pack(anchor="w", pady=4)
-        ctk.CTkButton(self.body, text="Select region manually…", height=36, font=self.f_bold,
-                      command=self._manual_region, **NEUTRAL_BTN).pack(anchor="w", pady=4)
-        self.region_lbl = ctk.CTkLabel(self.body, text=self._region_text(),
-                                       font=self.f_body, text_color=TEXT)
-        self.region_lbl.pack(anchor="w", pady=10)
-
-    def _region_text(self) -> str:
-        r = self.cfg.capture_region
-        return (f"Current region: {r.width}×{r.height} at ({r.left}, {r.top})"
-                if r.is_valid() else "Current region: not set")
-
-    def _auto_region(self) -> None:
-        if not gamewindow.backend_available():
-            messagebox.showinfo("Auto-detect",
-                                "Window detection needs the 'pygetwindow' package.")
-            return
-        rect = gamewindow.find_game_rect(self.cfg.game_window_title)
-        if not rect:
-            messagebox.showinfo(
-                "Auto-detect",
-                f"Couldn't find a window matching '{self.cfg.game_window_title}'. "
-                "Make sure Marvel Rivals is running (windowed/borderless helps).")
-            return
-        self.cfg.capture_region = gamewindow.suggest_hud_region(rect)
-        self.cfg.save()
-        self.app.refresh_widgets_from_config()
-        self.region_lbl.configure(text=self._region_text())
-
-    def _manual_region(self) -> None:
-        region = select_region(self.top)
-        if region:
-            self.cfg.capture_region = region
-            self.cfg.save()
-            self.app.refresh_widgets_from_config()
-            self.region_lbl.configure(text=self._region_text())
+            "RivalsRadio detects your current hero through the companion native "
+            "Overwolf app — no screen capture required.\n\n"
+            "1. Install Overwolf and enable developer mode.\n"
+            "2. Load the bundled 'overwolf-app' folder as an unpacked extension "
+            "and launch it.\n"
+            "3. Start Marvel Rivals — the app reports your hero to RivalsRadio "
+            "over localhost.\n\n"
+            "You can always switch heroes manually from the Status tab, which "
+            "works without any detection set up.")
+        ctk.CTkLabel(self.body, text=f"Listening on http://127.0.0.1:{self.cfg.native_port}",
+                     font=self.f_bold, text_color=TEXT).pack(anchor="w", pady=10)
 
     def _step_calibrate(self) -> None:
-        self._title("Step 3 — Calibrate your heroes")
+        self._title("Step 3 — Map your hero playlists")
         self._hint(
             "Almost done! In the Heroes tab:\n\n"
             "• Paste a Spotify playlist URI for each hero you main.\n"
-            "• While in a match on that hero, click 'Capture' to record its HUD.\n"
-            "• Optionally set an Avatar image for the Stage view.\n\n"
-            "Then press Start monitoring on the Status tab and play. Use "
-            "'Test detection' to check a hero is recognised confidently.\n\n"
+            "• Optionally set Stage art (logo + signature) and pick the two "
+            "Stage colours (main + accent) per hero.\n\n"
+            "Then press Start monitoring on the Status tab, or use the manual "
+            "hero switch to change the music instantly.\n\n"
             "Click Finish to close this wizard.")

@@ -14,6 +14,7 @@ F11 (or double-click) toggles fullscreen, Esc leaves fullscreen.
 
 from __future__ import annotations
 
+import sys
 import time
 import tkinter as tk
 from typing import Optional, Tuple
@@ -27,8 +28,8 @@ from .stage_state import StageState
 from .audio_visualizer import AudioVisualizer
 from . import nowplaying
 
-FPS_MS = 33                # ~30 fps animation tick
 CROSSFADE_S = 0.45         # hero-change background crossfade duration
+LOGO_PULSE_MS = 33         # cap the (expensive) logo PIL resize to ~30 fps
 
 
 class StageWindow:
@@ -37,6 +38,11 @@ class StageWindow:
         self.state = state
         self.cfg = cfg
         self.visualizer = visualizer
+
+        # Animation cadence: drive the bars at the configured FPS (up to 160).
+        self._fps = max(30, min(160, int(getattr(cfg, "stage_fps", 144))))
+        self._frame_ms = max(6, int(round(1000.0 / self._fps)))
+        self._last_pulse = 0.0
 
         self.top = tk.Toplevel(parent)
         self.top.title("RivalsRadio — Stage")
@@ -49,6 +55,7 @@ class StageWindow:
 
         self._shown_hero: Optional[str] = None
         self._shown_accent: Tuple[int, int, int] = theming.hex_to_rgb(theming.DEFAULT_ACCENT)
+        self._shown_main: Tuple[int, int, int] = theming.hex_to_rgb(self.state.main_hex)
         self._shown_logo: Optional[str] = None
         self._shown_sig: Optional[str] = None
 
@@ -98,12 +105,66 @@ class StageWindow:
     def alive(self) -> bool:
         return not self._closed and bool(self.top.winfo_exists())
 
+    def set_fps(self, fps: int) -> None:
+        """Update the animation frame rate live (clamped to 30–160)."""
+        self._fps = max(30, min(160, int(fps)))
+        self._frame_ms = max(6, int(round(1000.0 / self._fps)))
+
     # --------------------------------------------------------------- window
     def _toggle_fullscreen(self, _event=None) -> None:
         self._set_fullscreen(not self._fullscreen)
 
+    def _monitor_rect(self) -> Optional[Tuple[int, int, int, int]]:
+        """Physical rect (x, y, w, h) of the monitor the window sits on (Win32)."""
+        if not sys.platform.startswith("win"):
+            return None
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            hwnd = ctypes.windll.user32.GetParent(self.top.winfo_id())
+            if not hwnd:
+                hwnd = self.top.winfo_id()
+            MONITOR_DEFAULTTONEAREST = 2
+            hmon = ctypes.windll.user32.MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
+
+            class MONITORINFO(ctypes.Structure):
+                _fields_ = [("cbSize", wintypes.DWORD),
+                            ("rcMonitor", wintypes.RECT),
+                            ("rcWork", wintypes.RECT),
+                            ("dwFlags", wintypes.DWORD)]
+
+            mi = MONITORINFO()
+            mi.cbSize = ctypes.sizeof(MONITORINFO)
+            if not ctypes.windll.user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+                return None
+            r = mi.rcMonitor
+            return (r.left, r.top, r.right - r.left, r.bottom - r.top)
+        except Exception:
+            return None
+
     def _set_fullscreen(self, value: bool) -> None:
         self._fullscreen = value
+        rect = self._monitor_rect() if value else None
+        if rect is not None:
+            # Borderless fullscreen on the monitor the window is currently on —
+            # avoids Tk's "-fullscreen" jumping to the primary monitor, and sets
+            # an exact physical-pixel geometry so the canvas fills the screen.
+            x, y, w, h = rect
+            try:
+                self.top.attributes("-fullscreen", False)
+            except tk.TclError:
+                pass
+            self.top.overrideredirect(True)
+            self.top.geometry(f"{w}x{h}+{x}+{y}")
+            self.top.lift()
+            self.top.after(30, self._rebuild)
+            return
+        if not value:
+            try:
+                self.top.overrideredirect(False)
+            except tk.TclError:
+                pass
         try:
             self.top.attributes("-fullscreen", value)
         except tk.TclError:
@@ -151,8 +212,8 @@ class StageWindow:
         self.canvas.delete("all")
         self._items.clear()
 
-        # Background: accent gradient + glow (no portrait).
-        new_bg = render_background(w, h, self._shown_accent, None)
+        # Background: main-colour gradient + glow (no portrait).
+        new_bg = render_background(w, h, self._shown_accent, None, main=self._shown_main)
         if crossfade and self._cur_bg is not None:
             self._prev_bg = self._cur_bg.resize((w, h)) if self._cur_bg.size != (w, h) else self._cur_bg
             self._fade_start = time.time()
@@ -244,12 +305,15 @@ class StageWindow:
     def _sync_state(self) -> None:
         hero = self.state.hero
         accent = theming.hex_to_rgb(self.state.accent_hex)
+        main = theming.hex_to_rgb(self.state.main_hex)
         logo = self.state.logo_path
         sig = self.state.signature_path
         if (hero != self._shown_hero or accent != self._shown_accent
+                or main != self._shown_main
                 or logo != self._shown_logo or sig != self._shown_sig):
             self._shown_hero = hero
             self._shown_accent = accent
+            self._shown_main = main
             self._shown_logo = logo
             self._shown_sig = sig
             self._rebuild(crossfade=True)
@@ -259,11 +323,16 @@ class StageWindow:
             return
         self._sync_state()
         self._update_crossfade()
-        self._update_logo_pulse()
+        # The logo's per-frame PIL resize is expensive; cap it well below the
+        # bar frame rate so the bars can run smooth at up to 160 FPS.
+        now = time.time()
+        if (now - self._last_pulse) * 1000.0 >= LOGO_PULSE_MS:
+            self._last_pulse = now
+            self._update_logo_pulse()
         if self.cfg.show_now_playing:
             self._update_now_playing()
         self._update_visualizer()
-        self.top.after(FPS_MS, self._animate)
+        self.top.after(self._frame_ms, self._animate)
 
     def _audio_level(self) -> float:
         spectrum = self.visualizer.get_spectrum()
@@ -343,10 +412,13 @@ class StageWindow:
         base_fill = theming.rgb_to_hex(accent)
         cap = theming.rgb_to_hex(theming.scale(accent, 1.4))
         margin, gap, bar_w, base_y = self._viz_geom
+        # Keep the visual response consistent regardless of frame rate: the
+        # per-frame blend is scaled down as FPS rises so bars glide, not jitter.
+        alpha = max(0.12, min(0.6, 0.5 * (60.0 / self._fps)))
         for i in range(len(self._viz_items)):
             target = float(spectrum[i]) if i < len(spectrum) else 0.0
             target = max(target, 0.03)
-            self._levels[i] += (target - self._levels[i]) * 0.5
+            self._levels[i] += (target - self._levels[i]) * alpha
             lvl = self._levels[i]
             color = cap if lvl > 0.6 else base_fill
             x0 = margin + i * (bar_w + gap)

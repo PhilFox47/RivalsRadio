@@ -5,12 +5,12 @@ name: Build Windows EXE
 #
 # The zip contains:
 #   RivalsRadio.exe              <- the app (Python / PyInstaller)
-#   bridge/RivalsRadioBridge.exe <- the Overwolf GEP bridge (ow-electron), if built
+#   overwolf-app/                <- the native Overwolf app (default hero source)
+#   bridge/RivalsRadioBridge.exe <- the ow-electron GEP bridge (optional), if built
 #
-# At runtime RivalsRadio looks for bridge/RivalsRadioBridge.exe next to itself
-# and uses it as the primary (exact) hero source, falling back to screen capture
-# if it isn't present. The bridge build is best-effort: if it fails, the app
-# still ships and works in screen-capture mode.
+# Hero detection runs through the native Overwolf app by default (load-unpacked
+# in Overwolf). The ow-electron bridge is an optional alternative; its build is
+# best-effort and the app ships regardless. You can also switch heroes manually.
 #
 # - Runs on pushes to the dev branch and on version tags (v1.0.0, ...).
 # - Can also be triggered manually from the Actions tab (Run workflow).
@@ -76,9 +76,9 @@ jobs:
           if (Test-Path "$bridgeDir/RivalsRadioBridge.exe") {
             New-Item -ItemType Directory -Force -Path bundle/bridge | Out-Null
             Copy-Item "$bridgeDir/*" bundle/bridge/ -Recurse
-            Write-Host "::notice::Overwolf bridge (unpacked) bundled — GEP available out of the box."
+            Write-Host "::notice::Overwolf ow-electron bridge (unpacked) bundled."
           } else {
-            Write-Host "::warning::Bridge build not found; bundling screen-capture-only build."
+            Write-Host "::warning::ow-electron bridge build not found; shipping with the native Overwolf app only."
           }
           # Include the native Overwolf app (load-unpacked path).
           Copy-Item overwolf-app bundle/overwolf-app -Recurse
@@ -105,6 +105,7 @@ jobs:
             2. Unzip it **keeping the folder intact**.
             3. Double-click `RivalsRadio.exe`.
 
-            The zip bundles the app and the Overwolf GEP bridge
-            (`bridge/RivalsRadioBridge.exe`). Detection source `auto` prefers the
-            bridge and falls back to screen capture automatically.
+            The zip bundles the app, the native Overwolf app (`overwolf-app/`,
+            the default hero source — load it unpacked in Overwolf) and the
+            optional ow-electron GEP bridge. You can also switch heroes manually
+            from the Status tab.
