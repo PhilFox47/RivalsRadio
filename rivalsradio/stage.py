@@ -95,7 +95,11 @@ class StageWindow:
         self._fullscreen = False
         self._closed = False
 
-        self.top.bind("<Configure>", self._on_configure)
+        # Bind Configure on the *canvas* (not the Toplevel) and use the event's
+        # own width/height: winfo_width() races with layout, so reading it from a
+        # Toplevel Configure sometimes returns a stale 1×1 and the first proper
+        # render (with the glow) never happens until a manual resize.
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
         self.top.bind("<F11>", self._toggle_fullscreen)
         self.top.bind("<Double-Button-1>", self._toggle_fullscreen)
         self.top.bind("<Escape>", lambda e: self._set_fullscreen(False))
@@ -179,12 +183,16 @@ class StageWindow:
         except tk.TclError:
             pass
 
-    def _on_configure(self, event) -> None:
-        if event.widget is not self.top:
+    def _on_canvas_configure(self, event) -> None:
+        w, h = event.width, event.height
+        if w <= 1 or h <= 1 or (w, h) == self._last_size:
             return
-        size = (self.canvas.winfo_width(), self.canvas.winfo_height())
-        if size == self._last_size or size[0] <= 1 or size[1] <= 1:
+        # First valid size (or after the canvas was cleared): render right away
+        # so the background + glow appear immediately, not after a debounce.
+        if self._last_size == (0, 0) or "bg" not in self._items:
+            self._rebuild()
             return
+        # Later resizes: debounce, since a full rebuild is comparatively heavy.
         if self._resize_after is not None:
             try:
                 self.top.after_cancel(self._resize_after)
@@ -216,8 +224,12 @@ class StageWindow:
         if self._closed:
             return
         self._resize_after = None
-        w = max(1, self.canvas.winfo_width())
-        h = max(1, self.canvas.winfo_height())
+        w = self.canvas.winfo_width()
+        h = self.canvas.winfo_height()
+        # Don't render before the canvas has a real size — otherwise we'd paint a
+        # 1×1 background (no visible glow) and wait for a resize to fix it.
+        if w <= 1 or h <= 1:
+            return
         prev_img = self._bg_img if crossfade else None
         self._last_size = (w, h)
         self._cancel_fade()
