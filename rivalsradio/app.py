@@ -343,13 +343,12 @@ class App:
                                    text_color=ACCENT if hc.reference else MUTED, font=self.f_bold)
             ref_lbl.pack(side="left", padx=(2, 4))
             self.ref_labels[hero] = ref_lbl
-            ctk.CTkButton(row, text="Avatar", width=64, height=32, font=self.f_small,
-                          command=lambda h=hero: self._choose_avatar(h),
-                          **NEUTRAL_BTN).pack(side="left", padx=2)
-            av_lbl = ctk.CTkLabel(row, text="✓" if hc.avatar else "—", width=16,
-                                  text_color=ACCENT if hc.avatar else MUTED, font=self.f_bold)
-            av_lbl.pack(side="left", padx=(2, 4))
-            self.avatar_labels[hero] = av_lbl
+            art_set = bool(hc.logo or hc.signature)
+            art_btn = ctk.CTkButton(row, text="Art ✓" if art_set else "Art…", width=64, height=32,
+                                    font=self.f_small, command=lambda h=hero: self._open_hero_art(h),
+                                    **(ACCENT_BTN if art_set else NEUTRAL_BTN))
+            art_btn.pack(side="left", padx=2)
+            self.avatar_labels[hero] = art_btn  # reused dict: hero -> art button
             acc = tk.StringVar(value=hc.accent)
             self.accent_vars[hero] = acc
             ctk.CTkEntry(row, textvariable=acc, width=80, height=32, fg_color=CARD,
@@ -726,7 +725,7 @@ class App:
             return hc.accent
         if hero in self._accent_cache:
             return self._accent_cache[hero]
-        path = self.cfg.avatar_path(hero)
+        path = self.cfg.logo_path(hero) or self.cfg.avatar_path(hero)
         accent = theming.extract_accent(path) if path else theming.DEFAULT_ACCENT
         self._accent_cache[hero] = accent
         return accent
@@ -766,9 +765,11 @@ class App:
                 "Close RivalsRadio, right-click it, and choose 'Run as administrator'.")
 
     def _update_stage(self, hero: str) -> None:
-        path = self.cfg.avatar_path(hero)
         accent = self._effective_accent(hero)
-        self.state.set_hero(hero, path, accent)
+        self.state.set_hero(
+            hero, self.cfg.avatar_path(hero), accent,
+            logo_path=self.cfg.logo_path(hero),
+            signature_path=self.cfg.signature_path(hero))
         playlist = self.cfg.heroes[hero].playlist_uri if hero in self.cfg.heroes else ""
         self.session_stats.note_hero(hero, playlist)
 
@@ -793,28 +794,87 @@ class App:
             self.web_btn.configure(
                 text="Stop OBS overlay" if self.web_overlay.running else "Start OBS overlay")
 
-    def _choose_avatar(self, hero: str) -> None:
+    def _open_hero_art(self, hero: str) -> None:
+        """Per-hero Stage art: a centred logo (pulses) and a top-right signature."""
+        win = ctk.CTkToplevel(self.root)
+        win.title(f"Stage art — {hero}")
+        win.geometry("420x260")
+        win.configure(fg_color=CONTENT_BG)
+        win.transient(self.root)
+        win.after(200, lambda: win.grab_set() if win.winfo_exists() else None)
+
+        ctk.CTkLabel(win, text=f"Stage art for {hero}", font=self.f_section,
+                     text_color=TEXT).pack(anchor="w", padx=18, pady=(16, 2))
+        ctk.CTkLabel(win, text="PNG with transparent background works best.",
+                     font=self.f_small, text_color=MUTED).pack(anchor="w", padx=18, pady=(0, 10))
+
+        def row(kind: str):
+            hc = self.cfg.heroes.get(hero)
+            cur = getattr(hc, kind, "") if hc else ""
+            fr = ctk.CTkFrame(win, fg_color=CARD, corner_radius=10)
+            fr.pack(fill="x", padx=18, pady=6)
+            ctk.CTkLabel(fr, text=kind.capitalize(), width=90, anchor="w", font=self.f_bold,
+                         text_color=TEXT).pack(side="left", padx=12, pady=10)
+            status = ctk.CTkLabel(fr, text="✓ set" if cur else "not set", font=self.f_small,
+                                  text_color=ACCENT if cur else MUTED)
+            status.pack(side="left", padx=6)
+
+            def choose():
+                if self._choose_hero_image(hero, kind):
+                    status.configure(text="✓ set", text_color=ACCENT)
+                    self._mark_art_button(hero)
+
+            def clear():
+                setattr(self.cfg.heroes[hero], kind, "")
+                self.cfg.save()
+                self._accent_cache.pop(hero, None)
+                status.configure(text="not set", text_color=MUTED)
+                self._mark_art_button(hero)
+                if self.hero_var.get() == hero:
+                    self._update_stage(hero)
+
+            ctk.CTkButton(fr, text="Choose…", width=80, height=30, font=self.f_small,
+                          command=choose, **NEUTRAL_BTN).pack(side="right", padx=(4, 12))
+            ctk.CTkButton(fr, text="Clear", width=60, height=30, font=self.f_small,
+                          command=clear, **NEUTRAL_BTN).pack(side="right", padx=4)
+
+        row("logo")
+        row("signature")
+        ctk.CTkButton(win, text="Done", height=34, font=self.f_bold,
+                      command=win.destroy, **ACCENT_BTN).pack(pady=12)
+
+    def _mark_art_button(self, hero: str) -> None:
+        hc = self.cfg.heroes.get(hero)
+        art_set = bool(hc and (hc.logo or hc.signature))
+        btn = self.avatar_labels.get(hero)
+        if btn:
+            btn.configure(text="Art ✓" if art_set else "Art…",
+                          **(ACCENT_BTN if art_set else NEUTRAL_BTN))
+
+    def _choose_hero_image(self, hero: str, kind: str) -> bool:
+        """Copy a chosen image into the logos/ or signatures/ dir. Returns success."""
         path = filedialog.askopenfilename(
-            title=f"Choose avatar for {hero}",
+            title=f"Choose {kind} for {hero}",
             filetypes=[("Images", "*.png *.webp *.jpg *.jpeg"), ("All files", "*.*")],
         )
         if not path:
-            return
+            return False
         ext = os.path.splitext(path)[1].lower() or ".png"
-        filename = f"{hero.replace(' ', '_').replace('&', 'and')}{ext}"
-        dest = os.path.join(self.cfg.avatars_dir, filename)
+        filename = f"{hero.replace(' ', '_').replace('&', 'and')}_{kind}{ext}"
+        dest_dir = self.cfg.logos_dir if kind == "logo" else self.cfg.signatures_dir
+        dest = os.path.join(dest_dir, filename)
         try:
             shutil.copyfile(path, dest)
         except OSError as exc:
-            messagebox.showerror("Avatar", f"Could not copy image:\n{exc}")
-            return
-        self.cfg.heroes[hero].avatar = filename
+            messagebox.showerror(kind.capitalize(), f"Could not copy image:\n{exc}")
+            return False
+        setattr(self.cfg.heroes[hero], kind, filename)
         self.cfg.save()
         self._accent_cache.pop(hero, None)
-        self.avatar_labels[hero].configure(text="✓", text_color=ACCENT)
-        self._append_log(f"Avatar set for {hero} (accent: {self._effective_accent(hero)}).")
+        self._append_log(f"{kind.capitalize()} set for {hero}.")
         if self.hero_var.get() == hero:
             self._update_stage(hero)
+        return True
 
     def _capture_reference(self, hero: str) -> None:
         if not self.cfg.capture_region.is_valid():

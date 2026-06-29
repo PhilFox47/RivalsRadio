@@ -37,6 +37,8 @@ class StageState:
         self._lock = threading.Lock()
         self.hero: Optional[str] = None
         self.avatar_path: Optional[str] = None
+        self.logo_path: Optional[str] = None
+        self.signature_path: Optional[str] = None
         self.accent_hex: str = "#1DB954"
         self.track = TrackInfo()
         self._visualizer = None  # set via attach_visualizer
@@ -44,10 +46,14 @@ class StageState:
     def attach_visualizer(self, visualizer) -> None:
         self._visualizer = visualizer
 
-    def set_hero(self, hero: str, avatar_path: Optional[str], accent_hex: str) -> None:
+    def set_hero(self, hero: str, avatar_path: Optional[str], accent_hex: str,
+                 logo_path: Optional[str] = None,
+                 signature_path: Optional[str] = None) -> None:
         with self._lock:
             self.hero = hero
             self.avatar_path = avatar_path
+            self.logo_path = logo_path
+            self.signature_path = signature_path
             if accent_hex:
                 self.accent_hex = accent_hex
 

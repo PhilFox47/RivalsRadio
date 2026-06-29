@@ -71,8 +71,13 @@ class HeroConfig:
     reference: str = ""
     # Filename (relative to avatars/) of the hero artwork shown on the Stage.
     avatar: str = ""
+    # Filename (relative to logos/) of the hero logo shown centred on the Stage
+    # (pulses with the audio). Replaces the old portrait.
+    logo: str = ""
+    # Filename (relative to signatures/) of the hero signature shown top-right.
+    signature: str = ""
     # Optional manual accent override as "#RRGGBB". Blank = auto-extract from
-    # the avatar image.
+    # the logo/avatar image.
     accent: str = ""
 
 
@@ -120,6 +125,18 @@ class Config:
     def avatars_dir(self) -> str:
         return os.path.join(app_data_dir(), "avatars")
 
+    @property
+    def logos_dir(self) -> str:
+        d = os.path.join(app_data_dir(), "logos")
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    @property
+    def signatures_dir(self) -> str:
+        d = os.path.join(app_data_dir(), "signatures")
+        os.makedirs(d, exist_ok=True)
+        return d
+
     def canonical_hero(self, name: str) -> str:
         """Resolve a detected hero name to the roster's canonical spelling.
 
@@ -139,6 +156,18 @@ class Config:
         if not h or not h.avatar:
             return None
         return os.path.join(self.avatars_dir, h.avatar)
+
+    def logo_path(self, hero: str) -> Optional[str]:
+        h = self.heroes.get(hero)
+        if not h or not h.logo:
+            return None
+        return os.path.join(self.logos_dir, h.logo)
+
+    def signature_path(self, hero: str) -> Optional[str]:
+        h = self.heroes.get(hero)
+        if not h or not h.signature:
+            return None
+        return os.path.join(self.signatures_dir, h.signature)
 
     # ----- persistence ---------------------------------------------------
     @classmethod
