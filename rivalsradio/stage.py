@@ -1,23 +1,32 @@
-"""The Stage: a large, themed "now playing" view for a second monitor.
+"""The Stage: a performant second-screen "now playing" view.
+
+Design goal: simple, appealing, and above all **smooth**. The trick to high FPS
+with Tkinter's canvas is to never allocate in the animation loop — so all the
+expensive work (background render, the logo's scale ladder, album art) happens
+**once** per hero/size change, and the per-frame loop only:
+
+  • swaps the logo to a pre-rendered, pre-scaled PhotoImage (an index lookup),
+  • moves the visualizer bar rectangles (canvas ``coords`` only),
+  • nudges the progress bar.
+
+No per-frame PIL work and no per-frame PhotoImage allocation, so it sustains the
+configured frame rate (up to 160 FPS).
 
 Layout:
-  • centre  — the hero's **logo**, pulsing with the audio
-  • top-right — the hero's **signature**
-  • top-left  — now-playing (album art + track + progress)
-  • bottom    — the audio-reactive visualizer bars
+  • centre     — hero logo, pulsing with the audio
+  • top-right  — hero signature
+  • top-left   — now playing (album art + track + progress)
+  • bottom     — audio-reactive visualizer bars
 
-Reads everything from a shared ``StageState`` so it always matches the web
-overlay. Switching heroes crossfades the accent background.
-
-F11 (or double-click) toggles fullscreen, Esc leaves fullscreen.
+F11 / double-click toggles fullscreen (on the window's current monitor),
+Esc leaves fullscreen.
 """
 
 from __future__ import annotations
 
 import sys
-import time
 import tkinter as tk
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from PIL import Image, ImageTk
 
@@ -28,8 +37,10 @@ from .stage_state import StageState
 from .audio_visualizer import AudioVisualizer
 from . import nowplaying
 
-CROSSFADE_S = 0.45         # hero-change background crossfade duration
-LOGO_PULSE_MS = 33         # cap the (expensive) logo PIL resize to ~30 fps
+PULSE_STEPS = 16           # pre-rendered logo scales (1.0 → PULSE_MAX)
+PULSE_MAX = 1.16           # biggest logo scale at peak audio
+FADE_STEPS = 7             # pre-rendered background crossfade frames
+FADE_MS = 28               # ms per crossfade frame (~200ms total)
 
 
 class StageWindow:
@@ -42,7 +53,6 @@ class StageWindow:
         # Animation cadence: drive the bars at the configured FPS (up to 160).
         self._fps = max(30, min(160, int(getattr(cfg, "stage_fps", 144))))
         self._frame_ms = max(6, int(round(1000.0 / self._fps)))
-        self._last_pulse = 0.0
 
         self.top = tk.Toplevel(parent)
         self.top.title("RivalsRadio — Stage")
@@ -53,29 +63,33 @@ class StageWindow:
         self.canvas = tk.Canvas(self.top, bg="#05060a", highlightthickness=0, bd=0)
         self.canvas.pack(fill="both", expand=True)
 
+        # What's currently shown (so we only rebuild on real changes).
         self._shown_hero: Optional[str] = None
-        self._shown_accent: Tuple[int, int, int] = theming.hex_to_rgb(theming.DEFAULT_ACCENT)
-        self._shown_main: Tuple[int, int, int] = theming.hex_to_rgb(self.state.main_hex)
+        self._shown_accent = theming.hex_to_rgb(theming.DEFAULT_ACCENT)
+        self._shown_main = theming.hex_to_rgb(self.state.main_hex)
         self._shown_logo: Optional[str] = None
         self._shown_sig: Optional[str] = None
 
+        # Cached, pre-rendered assets (rebuilt only on size/hero change).
+        self._img_cache: dict = {}                 # path -> original RGBA Image
+        self._bg_img: Optional[Image.Image] = None
         self._bg_photo: Optional[ImageTk.PhotoImage] = None
-        self._cur_bg: Optional[Image.Image] = None
-        self._prev_bg: Optional[Image.Image] = None
-        self._fade_start = 0.0
-
-        self._img_cache: dict = {}          # path -> original RGBA Image
-        self._logo_orig: Optional[Image.Image] = None
-        self._logo_photo: Optional[ImageTk.PhotoImage] = None
-        self._logo_base_h = 1
+        self._logo_ladder: List[ImageTk.PhotoImage] = []
         self._sig_photo: Optional[ImageTk.PhotoImage] = None
         self._art_photo: Optional[ImageTk.PhotoImage] = None
         self._art_url = ""
-        self._pulse = 0.0
 
+        # Crossfade state (frames pre-rendered once per hero switch).
+        self._fade_frames: List[ImageTk.PhotoImage] = []
+        self._fade_after: Optional[str] = None
+
+        # Per-frame live state.
+        self._pulse = 0.0
+        self._levels: List[float] = []
         self._items: dict = {}
-        self._viz_items: list = []
-        self._levels: list = []
+        self._viz_items: List[int] = []
+        self._viz_geom: Tuple[int, int, int, int] = (0, 0, 0, 0)
+        self._pb_geom: Tuple[int, int, int, int] = (0, 0, 0, 0)
         self._last_size: Tuple[int, int] = (0, 0)
         self._resize_after: Optional[str] = None
         self._fullscreen = False
@@ -106,7 +120,6 @@ class StageWindow:
         return not self._closed and bool(self.top.winfo_exists())
 
     def set_fps(self, fps: int) -> None:
-        """Update the animation frame rate live (clamped to 30–160)."""
         self._fps = max(30, min(160, int(fps)))
         self._frame_ms = max(6, int(round(1000.0 / self._fps)))
 
@@ -125,8 +138,7 @@ class StageWindow:
             hwnd = ctypes.windll.user32.GetParent(self.top.winfo_id())
             if not hwnd:
                 hwnd = self.top.winfo_id()
-            MONITOR_DEFAULTTONEAREST = 2
-            hmon = ctypes.windll.user32.MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
+            hmon = ctypes.windll.user32.MonitorFromWindow(hwnd, 2)  # NEAREST
 
             class MONITORINFO(ctypes.Structure):
                 _fields_ = [("cbSize", wintypes.DWORD),
@@ -147,9 +159,6 @@ class StageWindow:
         self._fullscreen = value
         rect = self._monitor_rect() if value else None
         if rect is not None:
-            # Borderless fullscreen on the monitor the window is currently on —
-            # avoids Tk's "-fullscreen" jumping to the primary monitor, and sets
-            # an exact physical-pixel geometry so the canvas fills the screen.
             x, y, w, h = rect
             try:
                 self.top.attributes("-fullscreen", False)
@@ -181,7 +190,7 @@ class StageWindow:
                 self.top.after_cancel(self._resize_after)
             except Exception:
                 pass
-        self._resize_after = self.top.after(90, self._rebuild)
+        self._resize_after = self.top.after(120, self._rebuild)
 
     # ----------------------------------------------------------- image load
     def _load_image(self, path: Optional[str]) -> Optional[Image.Image]:
@@ -199,27 +208,28 @@ class StageWindow:
     @staticmethod
     def _fit(img: Image.Image, max_w: int, max_h: int) -> Image.Image:
         r = min(max_w / img.width, max_h / img.height)
-        return img.resize((max(1, int(img.width * r)), max(1, int(img.height * r))), Image.LANCZOS)
+        return img.resize((max(1, int(img.width * r)), max(1, int(img.height * r))),
+                          Image.LANCZOS)
 
-    # ----------------------------------------------------------- rendering
+    # ----------------------------------------------------------- rebuild
     def _rebuild(self, crossfade: bool = False) -> None:
         if self._closed:
             return
         self._resize_after = None
         w = max(1, self.canvas.winfo_width())
         h = max(1, self.canvas.winfo_height())
+        prev_img = self._bg_img if crossfade else None
         self._last_size = (w, h)
+        self._cancel_fade()
         self.canvas.delete("all")
         self._items.clear()
 
-        # Background: main-colour gradient + glow (no portrait).
-        new_bg = render_background(w, h, self._shown_accent, None, main=self._shown_main)
-        if crossfade and self._cur_bg is not None:
-            self._prev_bg = self._cur_bg.resize((w, h)) if self._cur_bg.size != (w, h) else self._cur_bg
-            self._fade_start = time.time()
-        self._cur_bg = new_bg
-        self._bg_photo = ImageTk.PhotoImage(new_bg)
-        self._items["bg"] = self.canvas.create_image(0, 0, anchor="nw", image=self._bg_photo)
+        # Background (main-colour gradient + glow). Rendered once here.
+        self._bg_img = render_background(w, h, self._shown_accent, None,
+                                         main=self._shown_main)
+        self._bg_photo = ImageTk.PhotoImage(self._bg_img)
+        self._items["bg"] = self.canvas.create_image(0, 0, anchor="nw",
+                                                      image=self._bg_photo)
 
         self._build_logo(w, h)
         self._build_signature(w, h)
@@ -227,65 +237,73 @@ class StageWindow:
             self._build_now_playing(w, h)
         self._build_visualizer(w, h)
 
-        # Discoverable fullscreen hint.
-        self._text("hint", w - 12, h - 8, "Double-click / F11 fullscreen · Esc exit",
-                   max(10, int(h * 0.014)), "#6b7178", anchor="se")
+        self.canvas.create_text(
+            w - 12, h - 8, text="Double-click / F11 fullscreen · Esc exit",
+            fill="#6b7178", anchor="se",
+            font=("Segoe UI", max(9, int(h * 0.013))))
 
-    def _text(self, key: str, x: int, y: int, text: str, size: int, fill: str,
-              bold: bool = False, anchor: str = "n") -> None:
-        font = ("Segoe UI", size, "bold" if bold else "normal")
-        self._items[key] = self.canvas.create_text(
-            x, y, text=text, fill=fill, font=font, anchor=anchor)
+        if prev_img is not None and prev_img.size == (w, h):
+            self._start_fade(prev_img, self._bg_img)
 
     def _build_logo(self, w: int, h: int) -> None:
+        """Pre-render a ladder of scaled logo images so the pulse is just an
+        index lookup at runtime (no per-frame PIL work)."""
+        self._logo_ladder = []
         cx, cy = w // 2, int(h * 0.46)
-        self._logo_orig = self._load_image(self._shown_logo)
-        if self._logo_orig is not None:
-            fitted = self._fit(self._logo_orig, int(w * 0.5), int(h * 0.5))
-            self._logo_base_h = fitted.height
-            self._logo_photo = ImageTk.PhotoImage(fitted)
-            self._items["logo"] = self.canvas.create_image(cx, cy, image=self._logo_photo)
+        orig = self._load_image(self._shown_logo)
+        if orig is not None:
+            base = self._fit(orig, int(w * 0.46), int(h * 0.46))
+            for i in range(PULSE_STEPS):
+                scale = 1.0 + (PULSE_MAX - 1.0) * (i / (PULSE_STEPS - 1))
+                sw, sh = max(1, int(base.width * scale)), max(1, int(base.height * scale))
+                frame = base if i == 0 else base.resize((sw, sh), Image.BILINEAR)
+                self._logo_ladder.append(ImageTk.PhotoImage(frame))
+            self._items["logo"] = self.canvas.create_image(
+                cx, cy, image=self._logo_ladder[0])
         else:
-            # Fallback: the hero name, large and centred, if no logo is set.
             name = self._shown_hero or "Waiting for hero…"
             size = max(24, int(h * 0.11))
-            self._text("logo_sh", cx + 2, cy + 2, name, size, "#000000", bold=True, anchor="c")
-            self._text("logo", cx, cy, name, size, "#ffffff", bold=True, anchor="c")
+            self.canvas.create_text(cx + 2, cy + 2, text=name, fill="#000000",
+                                    font=("Segoe UI", size, "bold"))
+            self._items["logo_txt"] = self.canvas.create_text(
+                cx, cy, text=name, fill="#ffffff", font=("Segoe UI", size, "bold"))
 
     def _build_signature(self, w: int, h: int) -> None:
         sig = self._load_image(self._shown_sig)
         if sig is None:
+            self._sig_photo = None
             return
         pad = int(h * 0.04)
-        fitted = self._fit(sig, int(w * 0.34), int(h * 0.20))
+        fitted = self._fit(sig, int(w * 0.32), int(h * 0.18))
         self._sig_photo = ImageTk.PhotoImage(fitted)
-        self._items["sig"] = self.canvas.create_image(w - pad, pad, image=self._sig_photo, anchor="ne")
+        self.canvas.create_image(w - pad, pad, image=self._sig_photo, anchor="ne")
 
     def _build_now_playing(self, w: int, h: int) -> None:
         pad = int(h * 0.045)
         art = int(h * 0.13)
         x, y = pad, pad
-        self._items["art_box"] = self.canvas.create_rectangle(
-            x, y, x + art, y + art, outline="", fill="#111418")
+        self.canvas.create_rectangle(x, y, x + art, y + art, outline="", fill="#111418")
         self._items["art"] = self.canvas.create_image(x, y, anchor="nw")
         tx = x + art + int(w * 0.012)
         ts = max(12, int(h * 0.030))
-        self._text("track_sh", tx + 1, y + 1, "", ts, "#000000", bold=True, anchor="nw")
-        self._text("track", tx, y, "", ts, "#ffffff", bold=True, anchor="nw")
-        self._text("artist", tx, y + int(ts * 1.5), "", max(10, int(h * 0.022)),
-                   "#c9c9c9", anchor="nw")
+        self._items["track_sh"] = self.canvas.create_text(
+            tx + 1, y + 1, text="", fill="#000000", anchor="nw",
+            font=("Segoe UI", ts, "bold"))
+        self._items["track"] = self.canvas.create_text(
+            tx, y, text="", fill="#ffffff", anchor="nw", font=("Segoe UI", ts, "bold"))
+        self._items["artist"] = self.canvas.create_text(
+            tx, y + int(ts * 1.5), text="", fill="#c9c9c9", anchor="nw",
+            font=("Segoe UI", max(10, int(h * 0.022))))
         pb_y = y + art - max(4, int(h * 0.012))
         pb_w = int(w * 0.30)
         pb_h = max(3, int(h * 0.008))
-        self._items["pb_bg"] = self.canvas.create_rectangle(
-            tx, pb_y, tx + pb_w, pb_y + pb_h, outline="", fill="#2a2e33")
+        self.canvas.create_rectangle(tx, pb_y, tx + pb_w, pb_y + pb_h,
+                                     outline="", fill="#2a2e33")
         self._items["pb_fg"] = self.canvas.create_rectangle(
             tx, pb_y, tx, pb_y + pb_h, outline="", fill="#ffffff")
         self._pb_geom = (tx, pb_y, pb_w, pb_h)
 
     def _build_visualizer(self, w: int, h: int) -> None:
-        for item in self._viz_items:
-            self.canvas.delete(item)
         self._viz_items = []
         n = self.visualizer.bands
         self._levels = [0.0] * n
@@ -297,9 +315,41 @@ class StageWindow:
         base_y = int(h * 0.97)
         for i in range(n):
             x0 = margin + i * (bar_w + gap)
+            # Single fill set once; the loop only moves coords (no itemconfig).
             self._viz_items.append(self.canvas.create_rectangle(
-                x0, base_y, x0 + bar_w, base_y, fill=fill, width=0))
+                x0, base_y - 2, x0 + bar_w, base_y, fill=fill, width=0))
         self._viz_geom = (margin, gap, bar_w, base_y)
+
+    # ----------------------------------------------------------- crossfade
+    def _cancel_fade(self) -> None:
+        if self._fade_after is not None:
+            try:
+                self.top.after_cancel(self._fade_after)
+            except Exception:
+                pass
+            self._fade_after = None
+        self._fade_frames = []
+
+    def _start_fade(self, old: Image.Image, new: Image.Image) -> None:
+        """Pre-render a few blended frames once, then step through them. Cheap:
+        the blends happen here (once per hero switch), not in the animation loop."""
+        try:
+            self._fade_frames = [
+                ImageTk.PhotoImage(Image.blend(old, new, (i + 1) / FADE_STEPS))
+                for i in range(FADE_STEPS)
+            ]
+        except Exception:
+            self._fade_frames = []
+            return
+        self._step_fade(0)
+
+    def _step_fade(self, i: int) -> None:
+        if self._closed or i >= len(self._fade_frames):
+            self._fade_frames = []
+            self._fade_after = None
+            return
+        self.canvas.itemconfig(self._items["bg"], image=self._fade_frames[i])
+        self._fade_after = self.top.after(FADE_MS, lambda: self._step_fade(i + 1))
 
     # ----------------------------------------------------------- animation
     def _sync_state(self) -> None:
@@ -322,13 +372,7 @@ class StageWindow:
         if self._closed:
             return
         self._sync_state()
-        self._update_crossfade()
-        # The logo's per-frame PIL resize is expensive; cap it well below the
-        # bar frame rate so the bars can run smooth at up to 160 FPS.
-        now = time.time()
-        if (now - self._last_pulse) * 1000.0 >= LOGO_PULSE_MS:
-            self._last_pulse = now
-            self._update_logo_pulse()
+        self._update_logo_pulse()
         if self.cfg.show_now_playing:
             self._update_now_playing()
         self._update_visualizer()
@@ -339,54 +383,32 @@ class StageWindow:
         if spectrum is None or len(spectrum) == 0:
             return 0.0
         try:
-            return float(sum(spectrum) / len(spectrum))
+            return float(spectrum.mean())
         except Exception:
             return 0.0
 
     def _update_logo_pulse(self) -> None:
-        if self._logo_orig is None or "logo" not in self._items:
+        if not self._logo_ladder or "logo" not in self._items:
             return
-        target = self._audio_level()
-        self._pulse += (target - self._pulse) * 0.4
-        scale = 1.0 + min(0.22, self._pulse * 0.6)   # subtle, capped
-        w, h = self._last_size
-        base = self._fit(self._logo_orig, int(w * 0.5), int(h * 0.5))
-        new_h = max(1, int(base.height * scale))
-        new_w = max(1, int(base.width * scale))
-        try:
-            img = base.resize((new_w, new_h), Image.BILINEAR)
-            self._logo_photo = ImageTk.PhotoImage(img)
-            self.canvas.itemconfig(self._items["logo"], image=self._logo_photo)
-        except Exception:
-            pass
-
-    def _update_crossfade(self) -> None:
-        if self._prev_bg is None:
-            return
-        if self._prev_bg.size != self._cur_bg.size:   # e.g. a resize mid-fade
-            try:
-                self._prev_bg = self._prev_bg.resize(self._cur_bg.size)
-            except Exception:
-                self._prev_bg = None
-                return
-        t = (time.time() - self._fade_start) / CROSSFADE_S
-        if t >= 1.0:
-            self._prev_bg = None
-            self._bg_photo = ImageTk.PhotoImage(self._cur_bg)
-            self.canvas.itemconfig(self._items["bg"], image=self._bg_photo)
-            return
-        blended = Image.blend(self._prev_bg, self._cur_bg, t)
-        self._bg_photo = ImageTk.PhotoImage(blended)
-        self.canvas.itemconfig(self._items["bg"], image=self._bg_photo)
+        target = min(1.0, self._audio_level() * 2.2)
+        self._pulse += (target - self._pulse) * 0.35
+        idx = int(self._pulse * (PULSE_STEPS - 1))
+        idx = 0 if idx < 0 else (PULSE_STEPS - 1 if idx >= PULSE_STEPS else idx)
+        self.canvas.itemconfig(self._items["logo"], image=self._logo_ladder[idx])
 
     def _update_now_playing(self) -> None:
         if "track" not in self._items:
             return
         tr = self.state.track
         title = tr.title or "—"
-        self.canvas.itemconfig(self._items["track"], text=title)
-        self.canvas.itemconfig(self._items["track_sh"], text=title)
-        self.canvas.itemconfig(self._items["artist"], text=tr.artist)
+        # Text reconfig is cheap, but skip it when unchanged to stay allocation-free.
+        if getattr(self, "_last_title", None) != title:
+            self._last_title = title
+            self.canvas.itemconfig(self._items["track"], text=title)
+            self.canvas.itemconfig(self._items["track_sh"], text=title)
+        if getattr(self, "_last_artist", None) != tr.artist:
+            self._last_artist = tr.artist
+            self.canvas.itemconfig(self._items["artist"], text=tr.artist)
         if tr.album_art_url and tr.album_art_url != self._art_url:
             path = nowplaying.art_path_for(tr.album_art_url)
             if path:
@@ -400,28 +422,25 @@ class StageWindow:
                     pass
         tx, pb_y, pb_w, pb_h = self._pb_geom
         frac = (tr.live_progress_ms() / tr.duration_ms) if tr.duration_ms else 0.0
-        frac = max(0.0, min(1.0, frac))
+        frac = 0.0 if frac < 0 else (1.0 if frac > 1 else frac)
         self.canvas.coords(self._items["pb_fg"], tx, pb_y, tx + pb_w * frac, pb_y + pb_h)
 
     def _update_visualizer(self) -> None:
         if not self._viz_items:
             return
         spectrum = self.visualizer.get_spectrum()
-        w, h = self._last_size
-        accent = self._shown_accent
-        base_fill = theming.rgb_to_hex(accent)
-        cap = theming.rgb_to_hex(theming.scale(accent, 1.4))
+        ns = len(spectrum)
         margin, gap, bar_w, base_y = self._viz_geom
-        # Keep the visual response consistent regardless of frame rate: the
-        # per-frame blend is scaled down as FPS rises so bars glide, not jitter.
+        max_h = max(8, int(self._last_size[1] * 0.32))
+        # Frame-rate-aware smoothing so high FPS glides instead of jittering.
         alpha = max(0.12, min(0.6, 0.5 * (60.0 / self._fps)))
-        for i in range(len(self._viz_items)):
-            target = float(spectrum[i]) if i < len(spectrum) else 0.0
-            target = max(target, 0.03)
-            self._levels[i] += (target - self._levels[i]) * alpha
-            lvl = self._levels[i]
-            color = cap if lvl > 0.6 else base_fill
+        levels = self._levels
+        coords = self.canvas.coords
+        items = self._viz_items
+        for i in range(len(items)):
+            target = float(spectrum[i]) if i < ns else 0.0
+            if target < 0.03:
+                target = 0.03
+            levels[i] += (target - levels[i]) * alpha
             x0 = margin + i * (bar_w + gap)
-            bh = 2 + lvl * max(8, int(h * 0.32))
-            self.canvas.coords(self._viz_items[i], x0, base_y - bh, x0 + bar_w, base_y)
-            self.canvas.itemconfig(self._viz_items[i], fill=color)
+            coords(items[i], x0, base_y - (2 + levels[i] * max_h), x0 + bar_w, base_y)
