@@ -13,6 +13,7 @@ source is active.
 
 from __future__ import annotations
 
+import http.server
 import json
 import os
 import shlex
@@ -272,7 +273,97 @@ class GepHeroSource(HeroSource):
         self._thread = None
 
 
+# ---------------------------------------------------------------------------
+class NativeHeroSource(HeroSource):
+    """Receives hero/match data from a native Overwolf app over localhost HTTP.
+
+    The companion Overwolf app (see overwolf-app/) reads Marvel Rivals GEP via
+    ``overwolf.games.events`` and POSTs newline JSON messages here:
+        {"type":"hero","hero":"Hela"}
+        {"type":"game","running":true}
+        {"type":"match","result":"victory"} / {"type":"stats",...} / {"type":"log",...}
+    This needs only a whitelisted Overwolf account (Load unpacked) — no app store
+    approval and no ow-electron package provisioning.
+    """
+
+    name = "native"
+
+    def __init__(self, cfg: Config) -> None:
+        self.cfg = cfg
+        self._httpd: Optional[http.server.ThreadingHTTPServer] = None
+        self._thread: Optional[threading.Thread] = None
+        self._port = int(getattr(cfg, "native_port", 8771))
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    def start(self, on_hero: HeroFn, on_log: LogFn,
+              on_failed: Optional[FailFn] = None,
+              on_event: Optional[EventFn] = None) -> None:
+        last = {"hero": None}
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):  # silence default stderr logging
+                pass
+
+            def _cors(self):
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Allow-Headers", "Content-Type")
+                self.send_header("Access-Control-Allow-Methods", "POST,OPTIONS")
+
+            def do_OPTIONS(self):
+                self.send_response(204); self._cors(); self.end_headers()
+
+            def do_POST(self):
+                try:
+                    n = int(self.headers.get("Content-Length", 0) or 0)
+                    msg = json.loads(self.rfile.read(n).decode("utf-8"))
+                except Exception:
+                    msg = None
+                self.send_response(200); self._cors()
+                self.send_header("Content-Type", "text/plain"); self.end_headers()
+                self.wfile.write(b"ok")
+                if not isinstance(msg, dict):
+                    return
+                mtype = msg.get("type")
+                if mtype == "hero":
+                    hero = msg.get("hero")
+                    if hero and hero != last["hero"]:
+                        last["hero"] = hero
+                        on_hero(hero)
+                elif mtype == "log":
+                    on_log(f"[overwolf] {msg.get('message', '')}")
+                elif mtype in ("match", "stats", "game") and on_event:
+                    on_event(msg)
+
+        try:
+            self._httpd = http.server.ThreadingHTTPServer(("127.0.0.1", self._port), Handler)
+        except OSError as exc:
+            on_log(f"Native source: can't bind 127.0.0.1:{self._port} ({exc}).")
+            if on_failed:
+                on_failed()
+            return
+        on_log(f"Native Overwolf source listening on http://127.0.0.1:{self._port} — "
+               f"load the RivalsRadio Overwolf app and launch Marvel Rivals.")
+        self._thread = threading.Thread(
+            target=self._httpd.serve_forever, name="native-source", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        if self._httpd:
+            try:
+                self._httpd.shutdown()
+                self._httpd.server_close()
+            except Exception:
+                pass
+            self._httpd = None
+        self._thread = None
+
+
 def make_hero_source(cfg: Config) -> HeroSource:
     if cfg.hero_source == "gep":
         return GepHeroSource(cfg)
+    if cfg.hero_source == "native":
+        return NativeHeroSource(cfg)
     return ScreenHeroSource(cfg)

@@ -109,6 +109,8 @@ class Config:
     # Override the ow-electron packages endpoint. Blank = Overwolf PROD (default,
     # where Marvel Rivals is supported). Set the QA URL only for DEV-stage games.
     gep_packages_url: str = ""
+    # Localhost port the native Overwolf app POSTs hero data to ("native" source).
+    native_port: int = 8771
 
     @property
     def references_dir(self) -> str:
@@ -173,6 +175,7 @@ class Config:
             gep_bridge_cmd=raw.get("gep_bridge_cmd", ""),
             gep_debug=raw.get("gep_debug", False),
             gep_packages_url=raw.get("gep_packages_url", ""),
+            native_port=raw.get("native_port", 8771),
         )
         cfg.ensure_default_heroes()
         # Spotify dropped support for "localhost" redirect URIs; migrate the old
@@ -209,6 +212,7 @@ class Config:
             "gep_bridge_cmd": self.gep_bridge_cmd,
             "gep_debug": self.gep_debug,
             "gep_packages_url": self.gep_packages_url,
+            "native_port": self.native_port,
         }
 
     # ----- helpers -------------------------------------------------------

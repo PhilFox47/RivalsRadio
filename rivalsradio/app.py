@@ -230,7 +230,7 @@ class App:
         # Detection source as a modern segmented control.
         src = self._card(page, "Detection source")
         seg = ctk.CTkSegmentedButton(
-            src, values=["auto", "gep", "screen"], variable=self.source_var,
+            src, values=["auto", "gep", "native", "screen"], variable=self.source_var,
             command=self._apply_source_change, font=self.f_bold,
             selected_color=ACCENT, selected_hover_color=ACCENT_HOVER,
             unselected_color=CARD_HI, unselected_hover_color=NEUTRAL_HOVER,
@@ -459,7 +459,7 @@ class App:
         # Detection source.
         df = self._card(scroll, "Hero detection source")
         ctk.CTkSegmentedButton(
-            df, values=["auto", "gep", "screen"], variable=self.source_var,
+            df, values=["auto", "gep", "native", "screen"], variable=self.source_var,
             command=self._apply_source_change, font=self.f_bold,
             selected_color=ACCENT, selected_hover_color=ACCENT_HOVER,
             unselected_color=CARD_HI, unselected_hover_color=NEUTRAL_HOVER,

@@ -1,0 +1,29 @@
+{
+  "manifest_version": 1,
+  "type": "WebApp",
+  "meta": {
+    "name": "RivalsRadio GEP",
+    "author": "RivalsRadio",
+    "version": "1.0.0",
+    "minimum-overwolf-version": "0.200.0",
+    "description": "Reads the current Marvel Rivals hero via Overwolf GEP and sends it to the RivalsRadio desktop app.",
+    "icon": "icons/icon.png",
+    "icon_gray": "icons/icon_gray.png"
+  },
+  "permissions": ["GameInfo"],
+  "data": {
+    "start_window": "background",
+    "windows": {
+      "background": {
+        "file": "background.html",
+        "is_background_page": true,
+        "size": { "width": 200, "height": 120 }
+      }
+    },
+    "game_targeting": {
+      "type": "dedicated",
+      "game_ids": [24890]
+    },
+    "game_events": [24890]
+  }
+}

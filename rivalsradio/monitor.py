@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from .config import Config, HeroConfig
-from .hero_source import GepHeroSource, ScreenHeroSource, HeroSource
+from .hero_source import GepHeroSource, ScreenHeroSource, NativeHeroSource, HeroSource
 from .spotify_controller import SpotifyController
 
 LogFn = Callable[[str], None]
@@ -46,6 +46,8 @@ class Monitor:
 
         if mode == "screen":
             self._start_source(ScreenHeroSource(self.cfg))
+        elif mode == "native":
+            self._start_source(NativeHeroSource(self.cfg))
         elif mode == "gep":
             self._start_source(GepHeroSource(self.cfg))
         else:  # "auto": prefer GEP, fall back to screen
