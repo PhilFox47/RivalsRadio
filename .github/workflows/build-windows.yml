@@ -80,6 +80,8 @@ jobs:
           } else {
             Write-Host "::warning::Bridge build not found; bundling screen-capture-only build."
           }
+          # Include the native Overwolf app (load-unpacked path).
+          Copy-Item overwolf-app bundle/overwolf-app -Recurse
           Compress-Archive -Path bundle/* -DestinationPath RivalsRadio-windows.zip -Force
 
       - name: Upload artifact
