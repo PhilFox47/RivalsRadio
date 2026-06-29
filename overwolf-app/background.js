@@ -6,12 +6,17 @@
 // approval and no ow-electron package provisioning.
 
 const GAME_ID = 24890;                                   // Marvel Rivals class id
-const FEATURES = ['match_info', 'game_info', 'gep_internal'];
+// Only request documented Marvel Rivals features. Requesting an unsupported
+// feature (e.g. gep_internal) can make setRequiredFeatures reject the whole
+// call, so keep this list tight.
+const FEATURES = ['match_info', 'game_info'];
 const ENDPOINT = 'http://127.0.0.1:8771/event';          // RivalsRadio "native" source
 
 let lastHero = null;
 let lastResult = null;
 let registered = false;
+let featuresOk = false;
+let retryTimer = null;
 
 function post(obj) {
   try {
@@ -31,9 +36,28 @@ function isRivals(id) {
   return id === GAME_ID || Math.floor(id / 10) === GAME_ID;
 }
 
+// GEP isn't always ready the instant the game launches, so setRequiredFeatures
+// can fail on the first try. Retry until it reports success — this is the
+// Overwolf-recommended pattern and the usual reason hero data never arrives.
 function setFeatures() {
+  if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
   overwolf.games.events.setRequiredFeatures(FEATURES, (info) => {
     log('setRequiredFeatures → ' + JSON.stringify(info));
+    if (info && info.success) {
+      featuresOk = true;
+      log('✅ GEP features registered: ' +
+          JSON.stringify((info.supportedFeatures) || FEATURES));
+      // Features are live — pull the current state once so we catch a hero that
+      // was already selected before registration completed.
+      overwolf.games.events.getInfo((res) => {
+        log('getInfo → ' + JSON.stringify(res));
+        if (res && res.res) scan(res.res);
+        else if (res && res.info) scan(res.info);
+      });
+    } else {
+      featuresOk = false;
+      if (registered) retryTimer = setTimeout(setFeatures, 2000);
+    }
   });
 }
 
@@ -44,10 +68,10 @@ function onRunningChanged(info) {
     registered = true;
     log('✅ Marvel Rivals running — registering GEP features');
     setFeatures();
-    // The game may have launched before us; pull current state once.
-    overwolf.games.events.getInfo((res) => { if (res && res.res) scan(res.res); });
   } else if (!running) {
     registered = false;
+    featuresOk = false;
+    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
     lastHero = null;
     lastResult = null;
   }
@@ -58,7 +82,11 @@ overwolf.games.getRunningGameInfo((info) => onRunningChanged(info));
 overwolf.games.onGameInfoUpdated.addListener((res) => {
   if (res && res.gameInfo) onRunningChanged(res.gameInfo);
 });
-overwolf.games.events.onError.addListener((e) => log('gep error: ' + JSON.stringify(e)));
+overwolf.games.events.onError.addListener((e) => {
+  log('gep error: ' + JSON.stringify(e));
+  // An error often means GEP dropped; try to re-register while the game runs.
+  if (registered && !retryTimer) retryTimer = setTimeout(setFeatures, 2000);
+});
 overwolf.games.events.onInfoUpdates2.addListener((data) => {
   log('info: ' + JSON.stringify(data));            // raw — lets us confirm field names
   if (data && data.info) scan(data.info);

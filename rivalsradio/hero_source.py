@@ -231,6 +231,16 @@ class NativeHeroSource(HeroSource):
               on_event: Optional[EventFn] = None) -> None:
         last = {"hero": None}
 
+        # Always dump every raw message from the Overwolf app to a file so a
+        # user can attach it for diagnosis (the activity log gets truncated and
+        # is hard to copy). Truncated on each start.
+        dump_path = os.path.join(app_data_dir(), "native-events.log")
+        try:
+            dump = open(dump_path, "w", encoding="utf-8", buffering=1)
+        except OSError:
+            dump = None
+        self._dump = dump
+
         class Handler(http.server.BaseHTTPRequestHandler):
             def log_message(self, *args):  # silence default stderr logging
                 pass
@@ -246,12 +256,18 @@ class NativeHeroSource(HeroSource):
             def do_POST(self):
                 try:
                     n = int(self.headers.get("Content-Length", 0) or 0)
-                    msg = json.loads(self.rfile.read(n).decode("utf-8"))
+                    raw = self.rfile.read(n).decode("utf-8")
+                    msg = json.loads(raw)
                 except Exception:
-                    msg = None
+                    raw, msg = "", None
                 self.send_response(200); self._cors()
                 self.send_header("Content-Type", "text/plain"); self.end_headers()
                 self.wfile.write(b"ok")
+                if dump is not None and raw:
+                    try:
+                        dump.write(raw + "\n")
+                    except Exception:
+                        pass
                 if not isinstance(msg, dict):
                     return
                 mtype = msg.get("type")
@@ -274,6 +290,7 @@ class NativeHeroSource(HeroSource):
             return
         on_log(f"Native Overwolf source listening on http://127.0.0.1:{self._port} — "
                f"load the RivalsRadio Overwolf app and launch Marvel Rivals.")
+        on_log(f"Raw Overwolf events are being logged to {dump_path}")
         self._thread = threading.Thread(
             target=self._httpd.serve_forever, name="native-source", daemon=True)
         self._thread.start()
@@ -286,6 +303,13 @@ class NativeHeroSource(HeroSource):
             except Exception:
                 pass
             self._httpd = None
+        dump = getattr(self, "_dump", None)
+        if dump is not None:
+            try:
+                dump.close()
+            except Exception:
+                pass
+            self._dump = None
         self._thread = None
 
 
