@@ -8,6 +8,7 @@ https://developer.spotify.com/dashboard to obtain a client id/secret.
 from __future__ import annotations
 
 import os
+import random
 from typing import List, Optional, Tuple
 
 from .config import SpotifyConfig, app_data_dir
@@ -94,8 +95,23 @@ class SpotifyController:
             "is_playing": bool(data.get("is_playing", False)),
         }
 
-    def play_playlist(self, playlist_uri: str) -> None:
-        """Start playback of ``playlist_uri`` on the chosen device."""
+    def _playlist_track_count(self, playlist_uri: str) -> int:
+        """Best-effort total number of tracks in a playlist (0 if unknown)."""
+        if not self._sp:
+            return 0
+        try:
+            data = self._sp.playlist(playlist_uri, fields="tracks.total")
+            return int((data or {}).get("tracks", {}).get("total", 0) or 0)
+        except Exception:
+            return 0
+
+    def play_playlist(self, playlist_uri: str, shuffle: bool = True) -> None:
+        """Start playback of ``playlist_uri`` on the chosen device.
+
+        With ``shuffle`` (the default) the playlist is played shuffled and
+        playback starts on a random track, so it doesn't always open on the
+        first song.
+        """
         if not self._sp:
             raise RuntimeError("Spotify is not connected.")
         if not playlist_uri:
@@ -106,4 +122,16 @@ class SpotifyController:
                 "No active Spotify device found. Open Spotify on a device "
                 "(start playing anything once) and try again."
             )
-        self._sp.start_playback(device_id=device_id, context_uri=playlist_uri)
+        offset = None
+        if shuffle:
+            # Enable shuffle first so the rest of the queue is shuffled too.
+            try:
+                self._sp.shuffle(True, device_id=device_id)
+            except Exception:
+                pass  # non-fatal: still start playback below
+            # Pick a random starting track so the first song isn't always #1.
+            total = self._playlist_track_count(playlist_uri)
+            if total > 1:
+                offset = {"position": random.randint(0, total - 1)}
+        self._sp.start_playback(
+            device_id=device_id, context_uri=playlist_uri, offset=offset)
