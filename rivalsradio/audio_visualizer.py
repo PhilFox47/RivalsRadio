@@ -31,6 +31,7 @@ class AudioVisualizer:
         self.hop = hop
 
         self._spectrum = np.zeros(bands, dtype=np.float32)
+        self._beat = 0.0   # bass-onset envelope (drives the logo pulse)
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -92,12 +93,18 @@ class AudioVisualizer:
             return self._spectrum.copy()
 
     def get_bass(self) -> float:
-        """Mean level [0, 1] of the low/bass bands — drives the logo pulse."""
+        """Mean level [0, 1] of the low/bass bands (sustained bass energy)."""
         with self._lock:
             if self._spectrum.size == 0:
                 return 0.0
             k = min(self.bass_bands, self._spectrum.size)
             return float(self._spectrum[:k].mean())
+
+    def get_beat(self) -> float:
+        """Bass-onset envelope [0, 1] — spikes on kick/bass-drum hits and decays
+        between them, so it pulses to the beat instead of the overall level."""
+        with self._lock:
+            return float(self._beat)
 
     # ------------------------------------------------------------------
     def _run(self) -> None:
@@ -114,6 +121,11 @@ class AudioVisualizer:
         buf = np.zeros(self.blocksize, dtype=np.float32)   # rolling FFT window
         # Running peak for auto-gain so quiet and loud tracks both look good.
         peak = 1e-6
+        # Beat-detection state: we track the *rise* in (normalized) bass energy,
+        # not its sustained level, so the logo pulses on kick/bass-drum hits and
+        # sits still during steady bass.
+        bass_prev = -1.0   # <0 = seed on first frame (avoids a cold-start spike)
+        beat_env = 0.0
         try:
             with mic.recorder(samplerate=self.samplerate, channels=1,
                               blocksize=self.hop) as rec:
@@ -147,8 +159,26 @@ class AudioVisualizer:
                         smoothed + (norm - smoothed) * 0.06,
                     ).astype(np.float32)
 
+                    # --- beat envelope (bass onset) --------------------------
+                    # Work on the normalized bass (already auto-gained, 0..1) so
+                    # the rise is naturally bounded — no fragile peak tracking.
+                    bass_now = float(norm[:self.bass_bands].mean())
+                    if bass_prev < 0.0:
+                        bass_prev = bass_now
+                    flux = bass_now - bass_prev           # positive = energy rising
+                    bass_prev = bass_now
+                    if flux < 0.0:
+                        flux = 0.0
+                    onset = min(1.0, flux * 4.0)
+                    # Ignore small wobble; only real hits punch the envelope up.
+                    onset = onset if onset > 0.12 else 0.0
+                    # Fast attack (jump up on a hit), quick decay (~200ms) so it
+                    # falls back between beats instead of staying maxed out.
+                    beat_env = max(beat_env * 0.90, onset)
+
                     with self._lock:
                         self._spectrum = smoothed.copy()
+                        self._beat = float(beat_env)
         except Exception as exc:  # pragma: no cover - hardware dependent
             self._error = f"audio capture stopped: {exc}"
             self.available = False

@@ -392,17 +392,19 @@ class StageWindow:
         self.top.after(self._frame_ms, self._animate)
 
     def _audio_level(self) -> float:
-        # The logo pulses to the bass, not the overall volume.
+        # The logo pulses to the beat (bass onset), not sustained volume.
         try:
-            return float(self.visualizer.get_bass())
+            return float(self.visualizer.get_beat())
         except Exception:
             return 0.0
 
     def _update_logo_pulse(self) -> None:
         if not self._logo_ladder or "logo" not in self._items:
             return
-        target = min(1.0, self._audio_level() * 2.6)
-        self._pulse += (target - self._pulse) * 0.35
+        target = min(1.0, self._audio_level())
+        # Punchy attack on a hit, smooth release so it eases back between beats.
+        attack = target > self._pulse
+        self._pulse += (target - self._pulse) * (0.6 if attack else 0.18)
         idx = int(self._pulse * (PULSE_STEPS - 1))
         idx = 0 if idx < 0 else (PULSE_STEPS - 1 if idx >= PULSE_STEPS else idx)
         self.canvas.itemconfig(self._items["logo"], image=self._logo_ladder[idx])
