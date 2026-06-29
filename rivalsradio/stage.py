@@ -392,18 +392,16 @@ class StageWindow:
         self.top.after(self._frame_ms, self._animate)
 
     def _audio_level(self) -> float:
-        spectrum = self.visualizer.get_spectrum()
-        if spectrum is None or len(spectrum) == 0:
-            return 0.0
+        # The logo pulses to the bass, not the overall volume.
         try:
-            return float(spectrum.mean())
+            return float(self.visualizer.get_bass())
         except Exception:
             return 0.0
 
     def _update_logo_pulse(self) -> None:
         if not self._logo_ladder or "logo" not in self._items:
             return
-        target = min(1.0, self._audio_level() * 2.2)
+        target = min(1.0, self._audio_level() * 2.6)
         self._pulse += (target - self._pulse) * 0.35
         idx = int(self._pulse * (PULSE_STEPS - 1))
         idx = 0 if idx < 0 else (PULSE_STEPS - 1 if idx >= PULSE_STEPS else idx)

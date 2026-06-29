@@ -97,7 +97,7 @@ Then in the app:
 
 The **Stage** is a large, themed "now playing" window built for a second
 monitor. The hero's **logo** sits front and centre and **pulses with the
-audio**, the hero's **signature** sits top-right, **now playing** (album art +
+bass**, the hero's **signature** sits top-right, **now playing** (album art +
 track + progress) sits top-left, and an **audio-reactive visualizer** runs along
 the bottom.
 

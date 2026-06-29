@@ -19,13 +19,15 @@ import numpy as np
 
 class AudioVisualizer:
     def __init__(self, bands: int = 56, samplerate: int = 48000,
-                 blocksize: int = 2048, hop: int = 256) -> None:
+                 blocksize: int = 4096, hop: int = 256) -> None:
         self.bands = bands
         self.samplerate = samplerate
+        # A larger FFT block gives finer low-frequency resolution (48000/4096 ≈
+        # 11.7 Hz bins) so the low/bass bands actually contain FFT bins.
         self.blocksize = blocksize
         # Capture in small hops but FFT over the full block (rolling buffer) so
         # the spectrum updates ~samplerate/hop times a second (e.g. 48000/256 ≈
-        # 187 Hz) instead of once per block (~23 Hz) — smooth, high-FPS bars.
+        # 187 Hz) instead of once per block — smooth, high-FPS bars.
         self.hop = hop
 
         self._spectrum = np.zeros(bands, dtype=np.float32)
@@ -34,14 +36,23 @@ class AudioVisualizer:
         self._thread: Optional[threading.Thread] = None
         self._window = np.hanning(blocksize).astype(np.float32)
 
-        # Pre-compute log-spaced band edges across the audible range.
+        # Pre-compute log-spaced band edges across the audible range. The low
+        # bands are narrower than one FFT bin, so a plain range query leaves some
+        # bands with *no* bins (dead bars). Fall back to the nearest bin for any
+        # empty band so every bar reacts.
         freqs = np.fft.rfftfreq(blocksize, 1.0 / samplerate)
         lo, hi = 40.0, min(16000.0, samplerate / 2)
         edges = np.logspace(np.log10(lo), np.log10(hi), bands + 1)
-        self._band_idx = [
-            np.where((freqs >= edges[i]) & (freqs < edges[i + 1]))[0]
-            for i in range(bands)
-        ]
+        self._band_idx = []
+        for i in range(bands):
+            idx = np.where((freqs >= edges[i]) & (freqs < edges[i + 1]))[0]
+            if idx.size == 0:
+                center = float(np.sqrt(edges[i] * edges[i + 1]))
+                idx = np.array([int(np.argmin(np.abs(freqs - center)))])
+            self._band_idx.append(idx)
+
+        # Number of low bands that make up "bass" (used by the logo pulse).
+        self.bass_bands = max(2, bands // 6)
 
         self.available = self._backend_available()
         self._error: Optional[str] = None
@@ -79,6 +90,14 @@ class AudioVisualizer:
     def get_spectrum(self) -> np.ndarray:
         with self._lock:
             return self._spectrum.copy()
+
+    def get_bass(self) -> float:
+        """Mean level [0, 1] of the low/bass bands — drives the logo pulse."""
+        with self._lock:
+            if self._spectrum.size == 0:
+                return 0.0
+            k = min(self.bass_bands, self._spectrum.size)
+            return float(self._spectrum[:k].mean())
 
     # ------------------------------------------------------------------
     def _run(self) -> None:

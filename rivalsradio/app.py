@@ -111,6 +111,19 @@ class App:
             self._toggle_web_overlay(initial=True)
         if not self.cfg.setup_complete:
             self.root.after(300, lambda: SetupWizard(self.root, self))
+        else:
+            # Auto-connect Spotify and auto-start monitoring on launch so the
+            # user doesn't have to click anything after opening the app.
+            self.root.after(400, self._autostart)
+
+    def _autostart(self) -> None:
+        """Connect Spotify (if configured) and start monitoring automatically."""
+        if (self.cfg.spotify.client_id and self.cfg.spotify.client_secret
+                and not self.spotify.connected):
+            self._connect_spotify()
+        if not self.monitor.running:
+            self.monitor.start()
+            self._refresh_status()
 
     def _set_window_icon(self) -> None:
         """Set the taskbar/title-bar icon from the bundled .ico (Windows)."""
@@ -325,6 +338,7 @@ class App:
         self.color_accent_vars.clear()
         self.color_swatches.clear()
         self.avatar_labels.clear()
+        self._row_thumbs = []  # keep CTkImage refs alive
         self._rendered_hero_count = len(self.cfg.heroes)
 
         if not self.cfg.heroes:
@@ -339,14 +353,17 @@ class App:
             hc = self.cfg.heroes[hero]
             row = ctk.CTkFrame(self.hero_rows, fg_color=CARD_HI, corner_radius=10)
             row.pack(fill="x", padx=6, pady=4)
-            ctk.CTkLabel(row, text=hero, width=140, anchor="w", font=self.f_bold,
-                         text_color=TEXT).pack(side="left", padx=(12, 6), pady=8)
+            thumb = self._hero_logo_thumb(hero, 26)
+            ctk.CTkLabel(row, image=thumb, text="", width=30).pack(
+                side="left", padx=(10, 0), pady=8)
+            ctk.CTkLabel(row, text=hero, width=128, anchor="w", font=self.f_bold,
+                         text_color=TEXT).pack(side="left", padx=(4, 6), pady=8)
             var = tk.StringVar(value=hc.playlist_uri)
             self.playlist_vars[hero] = var
             ctk.CTkEntry(row, textvariable=var, height=32, fg_color=CARD, border_width=0,
                          placeholder_text="spotify:playlist:…").pack(
                 side="left", fill="x", expand=True, padx=4, pady=8)
-            art_set = bool(hc.logo or hc.signature or hc.portrait)
+            art_set = bool(hc.logo and hc.signature and hc.portrait)
             art_btn = ctk.CTkButton(row, text="Art ✓" if art_set else "Art…", width=64, height=32,
                                     font=self.f_small, command=lambda h=hero: self._open_hero_art(h),
                                     **(ACCENT_BTN if art_set else NEUTRAL_BTN))
@@ -372,6 +389,26 @@ class App:
             self.manual_menu.configure(values=names)
             if self.manual_hero_var.get() not in names:
                 self.manual_hero_var.set(names[0])
+
+    def _hero_logo_thumb(self, hero: str, px: int):
+        """Small, main-colour-tinted logo thumbnail for the Heroes list (or None)."""
+        path = self.cfg.logo_path(hero)
+        if not path or not os.path.exists(path):
+            return None
+        try:
+            from PIL import Image, ImageChops
+            img = Image.open(path).convert("RGBA")
+            r = px / max(img.width, img.height)
+            img = img.resize((max(1, int(img.width * r)), max(1, int(img.height * r))),
+                             Image.LANCZOS)
+            solid = Image.new("RGB", img.size, theming.hex_to_rgb(self._effective_main(hero)))
+            tint = ImageChops.multiply(img.convert("RGB"), solid).convert("RGBA")
+            tint.putalpha(img.getchannel("A"))
+            cimg = ctk.CTkImage(light_image=tint, dark_image=tint, size=img.size)
+            self._row_thumbs.append(cimg)
+            return cimg
+        except Exception:
+            return None
 
     def _color_swatch(self, parent, hero: str, kind: str):
         """A small colour button (main/accent) that opens a colour picker."""
@@ -871,11 +908,21 @@ class App:
         row("signature")
         row("portrait")
         ctk.CTkButton(win, text="Done", height=34, font=self.f_bold,
-                      command=win.destroy, **ACCENT_BTN).pack(pady=12)
+                      command=lambda: self._close_art(win), **ACCENT_BTN).pack(pady=12)
+        win.protocol("WM_DELETE_WINDOW", lambda: self._close_art(win))
+
+    def _close_art(self, win) -> None:
+        """Close the art dialog and refresh the Heroes list (logo thumbnails)."""
+        try:
+            win.destroy()
+        except Exception:
+            pass
+        self._persist_hero_edits()
+        self._render_hero_rows()
 
     def _mark_art_button(self, hero: str) -> None:
         hc = self.cfg.heroes.get(hero)
-        art_set = bool(hc and (hc.logo or hc.signature or hc.portrait))
+        art_set = bool(hc and hc.logo and hc.signature and hc.portrait)
         btn = self.avatar_labels.get(hero)
         if btn:
             btn.configure(text="Art ✓" if art_set else "Art…",
