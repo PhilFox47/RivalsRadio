@@ -304,6 +304,13 @@ class StageWindow:
         self.canvas.create_image(w - pad, pad, image=self._sig_photo, anchor="ne")
 
     def _build_now_playing(self, w: int, h: int) -> None:
+        # The text/art items are recreated empty here; clear the "last shown"
+        # trackers so _update_now_playing refills them on the next tick instead
+        # of thinking nothing changed (which left them blank after a rebuild,
+        # e.g. going fullscreen, until the next song).
+        self._last_title = None
+        self._last_artist = None
+        self._art_url = ""
         pad = int(h * 0.045)
         art = int(h * 0.13)
         x, y = pad, pad
@@ -370,6 +377,11 @@ class StageWindow:
 
     def _step_fade(self, i: int) -> None:
         if self._closed or i >= len(self._fade_frames):
+            # Settle on the retained final background BEFORE dropping the fade
+            # frames — otherwise clearing the list GCs the PhotoImage the canvas
+            # is currently showing and the background (glow) disappears.
+            if not self._closed and "bg" in self._items and self._bg_photo is not None:
+                self.canvas.itemconfig(self._items["bg"], image=self._bg_photo)
             self._fade_frames = []
             self._fade_after = None
             return
