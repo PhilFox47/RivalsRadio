@@ -105,14 +105,15 @@ the bottom.
   press **F11** (or double-click) for fullscreen — it goes fullscreen **on the
   monitor the window is currently on** (Esc to exit).
 - **Art:** in the **Heroes tab**, click **Art…** next to a hero and pick a
-  transparent **logo** (shown centred, pulses), a **signature** (top-right) and a
-  **portrait**. The portrait isn't shown on the Stage (yet) — it's the source for
-  automatic colour extraction. Files are copied into `~/.rivalsradio/logos/`,
-  `signatures/` and `portraits/`.
-- **Per-hero colours:** each hero has a **Main** colour (the background glow) and
-  an **Accent** colour (the visualizer bars). Click the **Main** / **Accent**
-  swatches in the Heroes tab to pick them. Leave them unset to auto-derive from
-  the portrait/logo.
+  **logo** (shown centred, pulses — use a **white-on-transparent PNG**, it gets
+  tinted the main colour), a **signature** (top-right) and a **portrait**. The
+  portrait isn't shown on the Stage (yet) — it's the source for automatic colour
+  extraction. Files are copied into `~/.rivalsradio/logos/`, `signatures/` and
+  `portraits/`.
+- **Per-hero colours:** each hero has a **Main** colour (tints the white logo)
+  and an **Accent** colour (the visualizer bars and background glow). Click the
+  **Main** / **Accent** swatches in the Heroes tab to pick them. Leave them unset
+  to auto-derive from the portrait/logo.
 - **Visualizer FPS:** the bars run at up to **160 FPS** for a smooth look. Set
   the target in **Settings → Stage & overlay → Visualizer FPS**.
 - **Visualizer audio:** reacts to your PC's actual audio via WASAPI loopback (the

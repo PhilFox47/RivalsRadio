@@ -290,8 +290,9 @@ class App:
                   "start monitoring and play, and each hero you pick gets its own "
                   "entry. For each hero: paste the Spotify playlist URI, set the art "
                   "(logo + signature + portrait), and pick the two Stage colours — a "
-                  "main colour (background glow) and an accent colour (bars). Leave "
-                  "the colours unset to auto-extract them from the portrait/logo."),
+                  "main colour (tints the white logo) and an accent colour (bars + "
+                  "background glow). Leave them unset to auto-extract from the "
+                  "portrait/logo."),
         ).pack(anchor="w", padx=24, pady=(0, 8))
 
         self.hero_rows = ctk.CTkScrollableFrame(page, fg_color=CARD, corner_radius=14)
@@ -736,12 +737,13 @@ class App:
         return accent
 
     def _effective_main(self, hero: str) -> str:
-        """Main (background-glow) colour: explicit override, else a deep tone
-        derived from the accent."""
+        """Main colour: tints the (white) hero logo on the Stage. Explicit
+        override, else the auto-extracted accent so an untinted white logo still
+        comes out as a bright, legible colour."""
         hc = self.cfg.heroes.get(hero)
         if hc and hc.color_main and theming.is_valid_hex(hc.color_main):
             return hc.color_main
-        return theming.darken(self._effective_accent(hero), 0.45)
+        return self._effective_accent(hero)
 
     def _open_stage(self) -> None:
         if self.stage and self.stage.alive:
@@ -810,7 +812,7 @@ class App:
                 text="Stop OBS overlay" if self.web_overlay.running else "Start OBS overlay")
 
     _ART_HELP = {
-        "logo": "Centred on the Stage; pulses with the audio.",
+        "logo": "Centred on the Stage; pulses with audio and is tinted the main colour. White-on-transparent PNG works best.",
         "signature": "Shown top-right on the Stage.",
         "portrait": "Not shown on the Stage (yet); used for automatic colours.",
     }

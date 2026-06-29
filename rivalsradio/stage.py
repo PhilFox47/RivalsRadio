@@ -28,7 +28,7 @@ import sys
 import tkinter as tk
 from typing import List, Optional, Tuple
 
-from PIL import Image, ImageTk
+from PIL import Image, ImageChops, ImageTk
 
 from . import theming
 from .config import Config
@@ -224,9 +224,10 @@ class StageWindow:
         self.canvas.delete("all")
         self._items.clear()
 
-        # Background (main-colour gradient + glow). Rendered once here.
+        # Background gradient + glow use the accent colour (the main colour now
+        # tints the logo instead). Rendered once here.
         self._bg_img = render_background(w, h, self._shown_accent, None,
-                                         main=self._shown_main)
+                                         main=self._shown_accent)
         self._bg_photo = ImageTk.PhotoImage(self._bg_img)
         self._items["bg"] = self.canvas.create_image(0, 0, anchor="nw",
                                                       image=self._bg_photo)
@@ -245,14 +246,25 @@ class StageWindow:
         if prev_img is not None and prev_img.size == (w, h):
             self._start_fade(prev_img, self._bg_img)
 
+    def _tint_logo(self, img: Image.Image) -> Image.Image:
+        """Recolour a white-on-transparent logo with the hero's main colour.
+
+        Multiplies the RGB by the main colour (so pure white → main colour, and
+        any internal shading is preserved as darker shades) while keeping the
+        original alpha, so the silhouette/edges stay intact."""
+        solid = Image.new("RGB", img.size, self._shown_main)
+        tinted = ImageChops.multiply(img.convert("RGB"), solid).convert("RGBA")
+        tinted.putalpha(img.getchannel("A"))
+        return tinted
+
     def _build_logo(self, w: int, h: int) -> None:
-        """Pre-render a ladder of scaled logo images so the pulse is just an
-        index lookup at runtime (no per-frame PIL work)."""
+        """Pre-render a ladder of scaled, main-colour-tinted logo images so the
+        pulse is just an index lookup at runtime (no per-frame PIL work)."""
         self._logo_ladder = []
         cx, cy = w // 2, int(h * 0.46)
         orig = self._load_image(self._shown_logo)
         if orig is not None:
-            base = self._fit(orig, int(w * 0.46), int(h * 0.46))
+            base = self._tint_logo(self._fit(orig, int(w * 0.46), int(h * 0.46)))
             for i in range(PULSE_STEPS):
                 scale = 1.0 + (PULSE_MAX - 1.0) * (i / (PULSE_STEPS - 1))
                 sw, sh = max(1, int(base.width * scale)), max(1, int(base.height * scale))
@@ -263,10 +275,11 @@ class StageWindow:
         else:
             name = self._shown_hero or "Waiting for hero…"
             size = max(24, int(h * 0.11))
+            tint = theming.rgb_to_hex(self._shown_main)
             self.canvas.create_text(cx + 2, cy + 2, text=name, fill="#000000",
                                     font=("Segoe UI", size, "bold"))
             self._items["logo_txt"] = self.canvas.create_text(
-                cx, cy, text=name, fill="#ffffff", font=("Segoe UI", size, "bold"))
+                cx, cy, text=name, fill=tint, font=("Segoe UI", size, "bold"))
 
     def _build_signature(self, w: int, h: int) -> None:
         sig = self._load_image(self._shown_sig)
