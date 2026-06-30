@@ -823,7 +823,8 @@ class App:
             hero, self.cfg.avatar_path(hero), accent,
             logo_path=self.cfg.logo_path(hero),
             signature_path=self.cfg.signature_path(hero),
-            main_hex=main)
+            main_hex=main,
+            portrait_path=self.cfg.portrait_path(hero))
         playlist = self.cfg.heroes[hero].playlist_uri if hero in self.cfg.heroes else ""
         self.session_stats.note_hero(hero, playlist)
 

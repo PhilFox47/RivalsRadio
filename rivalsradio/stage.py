@@ -1,32 +1,34 @@
-"""The Stage: a performant second-screen "now playing" view.
+"""The Stage: a performant, animated second-screen "now playing" view.
 
-Design goal: simple, appealing, and above all **smooth**. The trick to high FPS
-with Tkinter's canvas is to never allocate in the animation loop — so all the
-expensive work (background render, the logo's scale ladder, album art) happens
-**once** per hero/size change, and the per-frame loop only:
+Two things keep it smooth:
 
-  • swaps the logo to a pre-rendered, pre-scaled PhotoImage (an index lookup),
-  • moves the visualizer bar rectangles (canvas ``coords`` only),
-  • nudges the progress bar.
+1. **No UI-thread stalls on a hero switch.** All the heavy per-switch image work
+   (background render + blur, the white logo's colour tint and its pulse
+   scale-ladder, the portrait) is done on a **background thread**. The UI thread
+   only ever wraps the finished PIL images in ``PhotoImage`` (cheap) and moves
+   canvas items, so the window never freezes while a hero changes.
 
-No per-frame PIL work and no per-frame PhotoImage allocation, so it sustains the
-configured frame rate (up to 160 FPS).
+2. **A hero-switch animation** masks the swap: the new hero's **portrait sweeps
+   across** the Stage while the background crossfades to the new colours, so the
+   change feels fluid instead of a 1–2 s hang.
 
-Layout:
-  • centre     — hero logo, pulsing with the audio
-  • top-right  — hero signature
-  • top-left   — now playing (album art + track + progress)
-  • bottom     — audio-reactive visualizer bars
+The steady-state animation loop is allocation-free: the logo pulse is an index
+into the pre-rendered ladder, the bars only move ``coords``.
 
-F11 / double-click toggles fullscreen (on the window's current monitor),
-Esc leaves fullscreen.
+Layout: centre = logo (pulses to the bass), top-right = signature,
+top-left = now playing, bottom = visualizer bars.
+
+F11 / double-click toggles fullscreen on the window's current monitor; Esc exits.
 """
 
 from __future__ import annotations
 
+import queue
 import sys
+import threading
+import time
 import tkinter as tk
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from PIL import Image, ImageChops, ImageTk
 
@@ -38,9 +40,40 @@ from .audio_visualizer import AudioVisualizer
 from . import nowplaying
 
 PULSE_STEPS = 16           # pre-rendered logo scales (1.0 → PULSE_MAX)
-PULSE_MAX = 1.16           # biggest logo scale at peak audio
-FADE_STEPS = 7             # pre-rendered background crossfade frames
-FADE_MS = 28               # ms per crossfade frame (~200ms total)
+PULSE_MAX = 1.16           # biggest logo scale at peak bass
+FADE_STEPS = 8             # pre-rendered background crossfade frames
+ANIM_S = 0.6               # hero-switch animation duration (seconds)
+LADDER_PER_FRAME = 3       # how many ladder PhotoImages to wrap per UI frame
+
+
+# --- pure-PIL helpers (safe to call off the main thread) -------------------
+def _open_rgba(path: Optional[str]) -> Optional[Image.Image]:
+    if not path:
+        return None
+    try:
+        return Image.open(path).convert("RGBA")
+    except Exception:
+        return None
+
+
+def _fit(img: Image.Image, max_w: int, max_h: int) -> Image.Image:
+    r = min(max_w / img.width, max_h / img.height)
+    return img.resize((max(1, int(img.width * r)), max(1, int(img.height * r))),
+                      Image.LANCZOS)
+
+
+def _tint(img: Image.Image, rgb: Tuple[int, int, int]) -> Image.Image:
+    """Recolour a white-on-transparent logo: multiply RGB by the colour (white →
+    colour, shading preserved) while keeping the original alpha."""
+    solid = Image.new("RGB", img.size, rgb)
+    out = ImageChops.multiply(img.convert("RGB"), solid).convert("RGBA")
+    out.putalpha(img.getchannel("A"))
+    return out
+
+
+def _smoothstep(t: float) -> float:
+    t = 0.0 if t < 0 else (1.0 if t > 1 else t)
+    return t * t * (3.0 - 2.0 * t)
 
 
 class StageWindow:
@@ -50,7 +83,6 @@ class StageWindow:
         self.cfg = cfg
         self.visualizer = visualizer
 
-        # Animation cadence: drive the bars at the configured FPS (up to 160).
         self._fps = max(30, min(160, int(getattr(cfg, "stage_fps", 144))))
         self._frame_ms = max(6, int(round(1000.0 / self._fps)))
 
@@ -63,30 +95,35 @@ class StageWindow:
         self.canvas = tk.Canvas(self.top, bg="#05060a", highlightthickness=0, bd=0)
         self.canvas.pack(fill="both", expand=True)
 
-        # What's currently shown (so we only rebuild on real changes).
+        # What's currently shown (so we only switch on real changes).
         self._shown_hero: Optional[str] = None
         self._shown_accent = theming.hex_to_rgb(theming.DEFAULT_ACCENT)
         self._shown_main = theming.hex_to_rgb(self.state.main_hex)
         self._shown_logo: Optional[str] = None
         self._shown_sig: Optional[str] = None
+        self._shown_portrait: Optional[str] = None
 
-        # Cached, pre-rendered assets (rebuilt only on size/hero change).
-        self._img_cache: dict = {}                 # path -> original RGBA Image
+        # Retained PhotoImages / PIL (canvas only holds weak refs).
         self._bg_img: Optional[Image.Image] = None
         self._bg_photo: Optional[ImageTk.PhotoImage] = None
+        self._fade_frames: List[ImageTk.PhotoImage] = []
+        self._fade_pil: List[Image.Image] = []        # not-yet-wrapped fade frames
         self._logo_ladder: List[ImageTk.PhotoImage] = []
+        self._ladder_pil: List[Image.Image] = []     # not-yet-wrapped pulse frames
         self._sig_photo: Optional[ImageTk.PhotoImage] = None
         self._art_photo: Optional[ImageTk.PhotoImage] = None
+        self._portrait_photo: Optional[ImageTk.PhotoImage] = None
         self._art_url = ""
 
-        # Crossfade state (frames pre-rendered once per hero switch).
-        self._fade_frames: List[ImageTk.PhotoImage] = []
-        self._fade_after: Optional[str] = None
+        # Async switch plumbing (worker thread → UI thread).
+        self._asset_q: "queue.Queue[Tuple[int, dict]]" = queue.Queue()
+        self._switch_seq = 0
+        self._anim: Optional[dict] = None
 
         # Per-frame live state.
         self._pulse = 0.0
         self._levels: List[float] = []
-        self._items: dict = {}
+        self._items: Dict[str, int] = {}
         self._viz_items: List[int] = []
         self._viz_geom: Tuple[int, int, int, int] = (0, 0, 0, 0)
         self._pb_geom: Tuple[int, int, int, int] = (0, 0, 0, 0)
@@ -95,10 +132,6 @@ class StageWindow:
         self._fullscreen = False
         self._closed = False
 
-        # Bind Configure on the *canvas* (not the Toplevel) and use the event's
-        # own width/height: winfo_width() races with layout, so reading it from a
-        # Toplevel Configure sometimes returns a stale 1×1 and the first proper
-        # render (with the glow) never happens until a manual resize.
         self.canvas.bind("<Configure>", self._on_canvas_configure)
         self.top.bind("<F11>", self._toggle_fullscreen)
         self.top.bind("<Double-Button-1>", self._toggle_fullscreen)
@@ -106,7 +139,6 @@ class StageWindow:
         self.top.protocol("WM_DELETE_WINDOW", self.close)
 
         self.visualizer.start()
-        self._rebuild()
         self._animate()
 
     # ------------------------------------------------------------------ API
@@ -171,7 +203,6 @@ class StageWindow:
             self.top.overrideredirect(True)
             self.top.geometry(f"{w}x{h}+{x}+{y}")
             self.top.lift()
-            self.top.after(30, self._rebuild)
             return
         if not value:
             try:
@@ -187,12 +218,10 @@ class StageWindow:
         w, h = event.width, event.height
         if w <= 1 or h <= 1 or (w, h) == self._last_size:
             return
-        # First valid size (or after the canvas was cleared): render right away
-        # so the background + glow appear immediately, not after a debounce.
+        # First valid size (or after the canvas was cleared): render right away.
         if self._last_size == (0, 0) or "bg" not in self._items:
             self._rebuild()
             return
-        # Later resizes: debounce, since a full rebuild is comparatively heavy.
         if self._resize_after is not None:
             try:
                 self.top.after_cancel(self._resize_after)
@@ -200,92 +229,113 @@ class StageWindow:
                 pass
         self._resize_after = self.top.after(120, self._rebuild)
 
-    # ----------------------------------------------------------- image load
-    def _load_image(self, path: Optional[str]) -> Optional[Image.Image]:
-        if not path:
-            return None
-        img = self._img_cache.get(path)
-        if img is None:
-            try:
-                img = Image.open(path).convert("RGBA")
-            except Exception:
-                return None
-            self._img_cache[path] = img
-        return img
+    # ----------------------------------------------------------- assets (PIL)
+    def _render_assets(self, w: int, h: int, *, accent, main, logo, sig, portrait,
+                       hero, prev_bg, want_fade: bool) -> dict:
+        """Build all the per-state images. Pure PIL — no Tk — so it is safe to
+        run on a worker thread for hero switches."""
+        bg = render_background(w, h, accent, None, main=accent)
+        fades: List[Image.Image] = []
+        if want_fade and prev_bg is not None and prev_bg.size == (w, h):
+            fades = [Image.blend(prev_bg, bg, (i + 1) / FADE_STEPS)
+                     for i in range(FADE_STEPS)]
 
-    @staticmethod
-    def _fit(img: Image.Image, max_w: int, max_h: int) -> Image.Image:
-        r = min(max_w / img.width, max_h / img.height)
-        return img.resize((max(1, int(img.width * r)), max(1, int(img.height * r))),
-                          Image.LANCZOS)
+        ladder: List[Image.Image] = []
+        orig = _open_rgba(logo)
+        if orig is not None:
+            base = _tint(_fit(orig, int(w * 0.46), int(h * 0.46)), main)
+            for i in range(PULSE_STEPS):
+                scale = 1.0 + (PULSE_MAX - 1.0) * (i / (PULSE_STEPS - 1))
+                if i == 0:
+                    ladder.append(base)
+                else:
+                    sw, sh = max(1, int(base.width * scale)), max(1, int(base.height * scale))
+                    ladder.append(base.resize((sw, sh), Image.BILINEAR))
 
-    # ----------------------------------------------------------- rebuild
-    def _rebuild(self, crossfade: bool = False) -> None:
+        sig_img = _open_rgba(sig)
+        sig_fit = _fit(sig_img, int(w * 0.32), int(h * 0.18)) if sig_img is not None else None
+
+        por = _open_rgba(portrait)
+        por_fit = _fit(por, int(w * 0.42), int(h * 0.72)) if por is not None else None
+
+        return {
+            "size": (w, h), "bg": bg, "fades": fades, "ladder": ladder,
+            "logo_name": None if ladder else (hero or "Waiting for hero…"),
+            "sig": sig_fit, "portrait": por_fit,
+        }
+
+    # ----------------------------------------------------------- paint (Tk)
+    def _rebuild(self, _crossfade: bool = False) -> None:
+        """Synchronous (re)paint for the initial render and resizes."""
         if self._closed:
             return
         self._resize_after = None
-        w = self.canvas.winfo_width()
-        h = self.canvas.winfo_height()
-        # Don't render before the canvas has a real size — otherwise we'd paint a
-        # 1×1 background (no visible glow) and wait for a resize to fix it.
+        w, h = self.canvas.winfo_width(), self.canvas.winfo_height()
         if w <= 1 or h <= 1:
             return
-        prev_img = self._bg_img if crossfade else None
+        assets = self._render_assets(
+            w, h, accent=self._shown_accent, main=self._shown_main,
+            logo=self._shown_logo, sig=self._shown_sig, portrait=self._shown_portrait,
+            hero=self._shown_hero, prev_bg=None, want_fade=False)
+        self._paint(assets, animate=False)
+
+    def _paint(self, assets: dict, animate: bool) -> None:
+        if self._closed:
+            return
+        self._cancel_anim()
+        w, h = assets["size"]
         self._last_size = (w, h)
-        self._cancel_fade()
         self.canvas.delete("all")
         self._items.clear()
 
-        # Background gradient + glow use the accent colour (the main colour now
-        # tints the logo instead). Rendered once here.
-        self._bg_img = render_background(w, h, self._shown_accent, None,
-                                         main=self._shown_accent)
+        # Background. Wrap the new bg + only the first crossfade frame now; wrap
+        # the remaining (full-screen) fade frames lazily so we don't allocate a
+        # stack of large PhotoImages in a single UI frame.
+        self._bg_img = assets["bg"]
         self._bg_photo = ImageTk.PhotoImage(self._bg_img)
-        self._items["bg"] = self.canvas.create_image(0, 0, anchor="nw",
-                                                      image=self._bg_photo)
+        self._fade_frames = []
+        self._fade_pil = []
+        if animate and assets["fades"]:
+            self._fade_frames = [ImageTk.PhotoImage(assets["fades"][0])]
+            self._fade_pil = list(assets["fades"][1:])
+            first_bg = self._fade_frames[0]
+        else:
+            first_bg = self._bg_photo
+        self._items["bg"] = self.canvas.create_image(0, 0, anchor="nw", image=first_bg)
 
-        self._build_logo(w, h)
-        self._build_signature(w, h)
+        # Portrait sits just above the background, behind everything else, so it
+        # sweeps in front of the glow but the logo stays the focal point.
+        self._portrait_photo = None
+        if animate and assets["portrait"] is not None:
+            self._portrait_photo = ImageTk.PhotoImage(assets["portrait"])
+            self._items["portrait"] = self.canvas.create_image(
+                -10000, h // 2, image=self._portrait_photo)  # off-screen until anim
+
+        self._build_logo(w, h, assets)
+        self._build_signature(w, h, assets)
         if self.cfg.show_now_playing:
             self._build_now_playing(w, h)
         self._build_visualizer(w, h)
-
         self.canvas.create_text(
             w - 12, h - 8, text="Double-click / F11 fullscreen · Esc exit",
-            fill="#6b7178", anchor="se",
-            font=("Segoe UI", max(9, int(h * 0.013))))
+            fill="#6b7178", anchor="se", font=("Segoe UI", max(9, int(h * 0.013))))
 
-        if prev_img is not None and prev_img.size == (w, h):
-            self._start_fade(prev_img, self._bg_img)
+        if animate:
+            self._start_anim(w, h)
 
-    def _tint_logo(self, img: Image.Image) -> Image.Image:
-        """Recolour a white-on-transparent logo with the hero's main colour.
-
-        Multiplies the RGB by the main colour (so pure white → main colour, and
-        any internal shading is preserved as darker shades) while keeping the
-        original alpha, so the silhouette/edges stay intact."""
-        solid = Image.new("RGB", img.size, self._shown_main)
-        tinted = ImageChops.multiply(img.convert("RGB"), solid).convert("RGBA")
-        tinted.putalpha(img.getchannel("A"))
-        return tinted
-
-    def _build_logo(self, w: int, h: int) -> None:
-        """Pre-render a ladder of scaled, main-colour-tinted logo images so the
-        pulse is just an index lookup at runtime (no per-frame PIL work)."""
-        self._logo_ladder = []
+    def _build_logo(self, w: int, h: int, assets: dict) -> None:
         cx, cy = w // 2, int(h * 0.46)
-        orig = self._load_image(self._shown_logo)
-        if orig is not None:
-            base = self._tint_logo(self._fit(orig, int(w * 0.46), int(h * 0.46)))
-            for i in range(PULSE_STEPS):
-                scale = 1.0 + (PULSE_MAX - 1.0) * (i / (PULSE_STEPS - 1))
-                sw, sh = max(1, int(base.width * scale)), max(1, int(base.height * scale))
-                frame = base if i == 0 else base.resize((sw, sh), Image.BILINEAR)
-                self._logo_ladder.append(ImageTk.PhotoImage(frame))
-            self._items["logo"] = self.canvas.create_image(
-                cx, cy, image=self._logo_ladder[0])
+        ladder = assets["ladder"]
+        self._logo_ladder = []
+        self._ladder_pil = []
+        if ladder:
+            # Wrap the base now; wrap the rest of the scale-ladder lazily over the
+            # next few UI frames so we never block on ~16 PhotoImage creations.
+            self._logo_ladder.append(ImageTk.PhotoImage(ladder[0]))
+            self._ladder_pil = list(ladder[1:])
+            self._items["logo"] = self.canvas.create_image(cx, cy, image=self._logo_ladder[0])
         else:
-            name = self._shown_hero or "Waiting for hero…"
+            name = assets["logo_name"] or "Waiting for hero…"
             size = max(24, int(h * 0.11))
             tint = theming.rgb_to_hex(self._shown_main)
             self.canvas.create_text(cx + 2, cy + 2, text=name, fill="#000000",
@@ -293,21 +343,19 @@ class StageWindow:
             self._items["logo_txt"] = self.canvas.create_text(
                 cx, cy, text=name, fill=tint, font=("Segoe UI", size, "bold"))
 
-    def _build_signature(self, w: int, h: int) -> None:
-        sig = self._load_image(self._shown_sig)
+    def _build_signature(self, w: int, h: int, assets: dict) -> None:
+        sig = assets["sig"]
         if sig is None:
             self._sig_photo = None
             return
         pad = int(h * 0.04)
-        fitted = self._fit(sig, int(w * 0.32), int(h * 0.18))
-        self._sig_photo = ImageTk.PhotoImage(fitted)
+        self._sig_photo = ImageTk.PhotoImage(sig)
         self.canvas.create_image(w - pad, pad, image=self._sig_photo, anchor="ne")
 
     def _build_now_playing(self, w: int, h: int) -> None:
-        # The text/art items are recreated empty here; clear the "last shown"
-        # trackers so _update_now_playing refills them on the next tick instead
-        # of thinking nothing changed (which left them blank after a rebuild,
-        # e.g. going fullscreen, until the next song).
+        # Items are recreated empty; clear the "last shown" trackers so
+        # _update_now_playing refills them on the next tick (otherwise they'd
+        # stay blank after a rebuild, e.g. going fullscreen, until the next song).
         self._last_title = None
         self._last_artist = None
         self._art_url = ""
@@ -347,68 +395,132 @@ class StageWindow:
         base_y = int(h * 0.97)
         for i in range(n):
             x0 = margin + i * (bar_w + gap)
-            # Single fill set once; the loop only moves coords (no itemconfig).
             self._viz_items.append(self.canvas.create_rectangle(
                 x0, base_y - 2, x0 + bar_w, base_y, fill=fill, width=0))
         self._viz_geom = (margin, gap, bar_w, base_y)
 
-    # ----------------------------------------------------------- crossfade
-    def _cancel_fade(self) -> None:
-        if self._fade_after is not None:
-            try:
-                self.top.after_cancel(self._fade_after)
-            except Exception:
-                pass
-            self._fade_after = None
-        self._fade_frames = []
+    # ----------------------------------------------------------- switching
+    def _start_switch(self) -> None:
+        """Kick off a background render of the new hero's assets."""
+        w, h = self._last_size
+        if w <= 1 or h <= 1:
+            return
+        self._switch_seq += 1
+        seq = self._switch_seq
+        params = dict(
+            w=w, h=h, accent=self._shown_accent, main=self._shown_main,
+            logo=self._shown_logo, sig=self._shown_sig, portrait=self._shown_portrait,
+            hero=self._shown_hero, prev_bg=self._bg_img)
+        threading.Thread(target=self._switch_worker, args=(seq, params),
+                         name="stage-switch", daemon=True).start()
 
-    def _start_fade(self, old: Image.Image, new: Image.Image) -> None:
-        """Pre-render a few blended frames once, then step through them. Cheap:
-        the blends happen here (once per hero switch), not in the animation loop."""
+    def _switch_worker(self, seq: int, p: dict) -> None:
         try:
-            self._fade_frames = [
-                ImageTk.PhotoImage(Image.blend(old, new, (i + 1) / FADE_STEPS))
-                for i in range(FADE_STEPS)
-            ]
+            assets = self._render_assets(
+                p["w"], p["h"], accent=p["accent"], main=p["main"], logo=p["logo"],
+                sig=p["sig"], portrait=p["portrait"], hero=p["hero"],
+                prev_bg=p["prev_bg"], want_fade=True)
         except Exception:
-            self._fade_frames = []
             return
-        self._step_fade(0)
+        self._asset_q.put((seq, assets))
 
-    def _step_fade(self, i: int) -> None:
-        if self._closed or i >= len(self._fade_frames):
-            # Settle on the retained final background BEFORE dropping the fade
-            # frames — otherwise clearing the list GCs the PhotoImage the canvas
-            # is currently showing and the background (glow) disappears.
-            if not self._closed and "bg" in self._items and self._bg_photo is not None:
-                self.canvas.itemconfig(self._items["bg"], image=self._bg_photo)
-            self._fade_frames = []
-            self._fade_after = None
-            return
-        self.canvas.itemconfig(self._items["bg"], image=self._fade_frames[i])
-        self._fade_after = self.top.after(FADE_MS, lambda: self._step_fade(i + 1))
+    def _poll_switch(self) -> None:
+        applied = None
+        try:
+            while True:
+                seq, assets = self._asset_q.get_nowait()
+                if seq == self._switch_seq:
+                    applied = assets
+        except queue.Empty:
+            pass
+        if applied is not None and not self._closed:
+            # Drop a result whose size no longer matches (window was resized
+            # while it rendered) — the resize already repainted at the new size.
+            if applied["size"] == self._last_size:
+                self._paint(applied, animate=True)
 
     # ----------------------------------------------------------- animation
+    def _cancel_anim(self) -> None:
+        self._anim = None
+
+    def _start_anim(self, w: int, h: int) -> None:
+        a = {"t0": time.time(), "dur": ANIM_S}
+        if "portrait" in self._items and self._portrait_photo is not None:
+            pw = self._portrait_photo.width()
+            a["px0"] = w + pw // 2 + 30        # off-screen right
+            a["px1"] = -pw // 2 - 30           # off-screen left
+            a["py"] = int(h * 0.5)
+        self._anim = a
+
+    def _step_anim(self) -> None:
+        a = self._anim
+        if a is None:
+            return
+        p = (time.time() - a["t0"]) / a["dur"]
+        if p >= 1.0:
+            # Settle the background on its retained final image, drop the portrait.
+            if "bg" in self._items and self._bg_photo is not None:
+                self.canvas.itemconfig(self._items["bg"], image=self._bg_photo)
+            if "portrait" in self._items:
+                self.canvas.delete(self._items.pop("portrait"))
+            self._portrait_photo = None
+            self._fade_frames = []
+            self._anim = None
+            return
+        e = _smoothstep(p)
+        if self._fade_frames:
+            # Timeline spans all FADE_STEPS frames; clamp to those wrapped so far.
+            idx = int(p * FADE_STEPS)
+            built = len(self._fade_frames) - 1
+            if idx > built:
+                idx = built
+            self.canvas.itemconfig(self._items["bg"], image=self._fade_frames[idx])
+        if "portrait" in self._items and "px0" in a:
+            x = a["px0"] + (a["px1"] - a["px0"]) * e
+            self.canvas.coords(self._items["portrait"], x, a["py"])
+
+    # ----------------------------------------------------------- loop
     def _sync_state(self) -> None:
         hero = self.state.hero
         accent = theming.hex_to_rgb(self.state.accent_hex)
         main = theming.hex_to_rgb(self.state.main_hex)
         logo = self.state.logo_path
         sig = self.state.signature_path
+        portrait = self.state.portrait_path
         if (hero != self._shown_hero or accent != self._shown_accent
-                or main != self._shown_main
-                or logo != self._shown_logo or sig != self._shown_sig):
+                or main != self._shown_main or logo != self._shown_logo
+                or sig != self._shown_sig or portrait != self._shown_portrait):
+            had_render = "bg" in self._items and self._last_size != (0, 0)
             self._shown_hero = hero
             self._shown_accent = accent
             self._shown_main = main
             self._shown_logo = logo
             self._shown_sig = sig
-            self._rebuild(crossfade=True)
+            self._shown_portrait = portrait
+            if had_render:
+                self._start_switch()        # animated, off-thread
+            # else: the first paint happens via _on_canvas_configure → _rebuild
+
+    def _wrap_pending(self) -> None:
+        """Wrap a few queued fade/ladder frames into PhotoImages per UI frame so
+        the work is spread out instead of stalling one frame."""
+        n = LADDER_PER_FRAME
+        while n > 0 and self._fade_pil:
+            self._fade_frames.append(ImageTk.PhotoImage(self._fade_pil.pop(0)))
+            n -= 1
+        while n > 0 and self._ladder_pil:
+            self._logo_ladder.append(ImageTk.PhotoImage(self._ladder_pil.pop(0)))
+            n -= 1
 
     def _animate(self) -> None:
         if self._closed:
             return
         self._sync_state()
+        self._poll_switch()
+        if self._fade_pil or self._ladder_pil:
+            self._wrap_pending()
+        if self._anim is not None:
+            self._step_anim()
         self._update_logo_pulse()
         if self.cfg.show_now_playing:
             self._update_now_playing()
@@ -416,7 +528,6 @@ class StageWindow:
         self.top.after(self._frame_ms, self._animate)
 
     def _audio_level(self) -> float:
-        # The logo pulses to the beat (bass onset), not sustained volume.
         try:
             return float(self.visualizer.get_beat())
         except Exception:
@@ -426,11 +537,11 @@ class StageWindow:
         if not self._logo_ladder or "logo" not in self._items:
             return
         target = min(1.0, self._audio_level())
-        # Punchy attack on a hit, smooth release so it eases back between beats.
         attack = target > self._pulse
         self._pulse += (target - self._pulse) * (0.6 if attack else 0.18)
         idx = int(self._pulse * (PULSE_STEPS - 1))
-        idx = 0 if idx < 0 else (PULSE_STEPS - 1 if idx >= PULSE_STEPS else idx)
+        top = len(self._logo_ladder) - 1
+        idx = 0 if idx < 0 else (top if idx > top else idx)
         self.canvas.itemconfig(self._items["logo"], image=self._logo_ladder[idx])
 
     def _update_now_playing(self) -> None:
@@ -438,7 +549,6 @@ class StageWindow:
             return
         tr = self.state.track
         title = tr.title or "—"
-        # Text reconfig is cheap, but skip it when unchanged to stay allocation-free.
         if getattr(self, "_last_title", None) != title:
             self._last_title = title
             self.canvas.itemconfig(self._items["track"], text=title)
@@ -469,7 +579,6 @@ class StageWindow:
         ns = len(spectrum)
         margin, gap, bar_w, base_y = self._viz_geom
         max_h = max(8, int(self._last_size[1] * 0.32))
-        # Frame-rate-aware smoothing so high FPS glides instead of jittering.
         alpha = max(0.12, min(0.6, 0.5 * (60.0 / self._fps)))
         levels = self._levels
         coords = self.canvas.coords

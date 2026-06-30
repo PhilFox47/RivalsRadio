@@ -39,6 +39,7 @@ class StageState:
         self.avatar_path: Optional[str] = None
         self.logo_path: Optional[str] = None
         self.signature_path: Optional[str] = None
+        self.portrait_path: Optional[str] = None
         self.accent_hex: str = "#1DB954"
         self.main_hex: str = "#0d3a22"
         self.track = TrackInfo()
@@ -50,12 +51,14 @@ class StageState:
     def set_hero(self, hero: str, avatar_path: Optional[str], accent_hex: str,
                  logo_path: Optional[str] = None,
                  signature_path: Optional[str] = None,
-                 main_hex: Optional[str] = None) -> None:
+                 main_hex: Optional[str] = None,
+                 portrait_path: Optional[str] = None) -> None:
         with self._lock:
             self.hero = hero
             self.avatar_path = avatar_path
             self.logo_path = logo_path
             self.signature_path = signature_path
+            self.portrait_path = portrait_path
             if accent_hex:
                 self.accent_hex = accent_hex
             if main_hex:
