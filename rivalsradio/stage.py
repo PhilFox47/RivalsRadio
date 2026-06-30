@@ -1,19 +1,21 @@
 """The Stage: a performant, animated second-screen "now playing" view.
 
-Two things keep it smooth:
+Smoothness comes from two things:
 
-1. **No UI-thread stalls on a hero switch.** All the heavy per-switch image work
-   (background render + blur, the white logo's colour tint and its pulse
-   scale-ladder, the portrait) is done on a **background thread**. The UI thread
-   only ever wraps the finished PIL images in ``PhotoImage`` (cheap) and moves
-   canvas items, so the window never freezes while a hero changes.
+1. **No UI-thread stall on a hero switch.** All the heavy per-switch image work
+   (background render + blur, the white logo's colour tint and pulse
+   scale-ladder, the portrait) runs on a **background thread** (pure PIL, which
+   releases the GIL), so the animation loop keeps running the old hero while the
+   new assets render. The UI thread only wraps finished images in ``PhotoImage``
+   (a few per frame) and moves canvas items.
 
-2. **A hero-switch animation** masks the swap: the new hero's **portrait sweeps
-   across** the Stage while the background crossfades to the new colours, so the
-   change feels fluid instead of a 1–2 s hang.
+2. **A masked wipe transition.** When the new assets are ready, the new hero's
+   portrait panel slides in to fully cover the Stage, the Stage is rebuilt to the
+   new hero *behind the cover* (so the rebuild's brief cost is invisible), then
+   the panel slides off to reveal it. The switch never looks frozen.
 
-The steady-state animation loop is allocation-free: the logo pulse is an index
-into the pre-rendered ladder, the bars only move ``coords``.
+The steady-state loop is allocation-free: the logo pulse is an index into the
+pre-rendered ladder; the bars only move ``coords``.
 
 Layout: centre = logo (pulses to the bass), top-right = signature,
 top-left = now playing, bottom = visualizer bars.
@@ -41,8 +43,9 @@ from . import nowplaying
 
 PULSE_STEPS = 16           # pre-rendered logo scales (1.0 → PULSE_MAX)
 PULSE_MAX = 1.16           # biggest logo scale at peak bass
-FADE_STEPS = 8             # pre-rendered background crossfade frames
-ANIM_S = 0.6               # hero-switch animation duration (seconds)
+T_IN = 0.28                # wipe-in (cover) duration, seconds
+T_SHOW = 0.30              # hold the portrait on screen (fully covered), seconds
+T_OUT = 0.34               # wipe-out (reveal) duration, seconds
 LADDER_PER_FRAME = 3       # how many ladder PhotoImages to wrap per UI frame
 
 
@@ -106,19 +109,19 @@ class StageWindow:
         # Retained PhotoImages / PIL (canvas only holds weak refs).
         self._bg_img: Optional[Image.Image] = None
         self._bg_photo: Optional[ImageTk.PhotoImage] = None
-        self._fade_frames: List[ImageTk.PhotoImage] = []
-        self._fade_pil: List[Image.Image] = []        # not-yet-wrapped fade frames
         self._logo_ladder: List[ImageTk.PhotoImage] = []
         self._ladder_pil: List[Image.Image] = []     # not-yet-wrapped pulse frames
         self._sig_photo: Optional[ImageTk.PhotoImage] = None
         self._art_photo: Optional[ImageTk.PhotoImage] = None
-        self._portrait_photo: Optional[ImageTk.PhotoImage] = None
+        self._cover_photo: Optional[ImageTk.PhotoImage] = None
         self._art_url = ""
 
-        # Async switch plumbing (worker thread → UI thread).
+        # Async switch + transition plumbing.
         self._asset_q: "queue.Queue[Tuple[int, dict]]" = queue.Queue()
         self._switch_seq = 0
-        self._anim: Optional[dict] = None
+        self._anim: Optional[dict] = None             # active wipe transition
+        self._pending: Optional[dict] = None          # assets to paint mid-wipe
+        self._cover: Optional[dict] = None            # cover canvas items
 
         # Per-frame live state.
         self._pulse = 0.0
@@ -218,7 +221,6 @@ class StageWindow:
         w, h = event.width, event.height
         if w <= 1 or h <= 1 or (w, h) == self._last_size:
             return
-        # First valid size (or after the canvas was cleared): render right away.
         if self._last_size == (0, 0) or "bg" not in self._items:
             self._rebuild()
             return
@@ -231,14 +233,9 @@ class StageWindow:
 
     # ----------------------------------------------------------- assets (PIL)
     def _render_assets(self, w: int, h: int, *, accent, main, logo, sig, portrait,
-                       hero, prev_bg, want_fade: bool) -> dict:
-        """Build all the per-state images. Pure PIL — no Tk — so it is safe to
-        run on a worker thread for hero switches."""
+                       hero) -> dict:
+        """Build all the per-state images. Pure PIL — no Tk — safe off-thread."""
         bg = render_background(w, h, accent, None, main=accent)
-        fades: List[Image.Image] = []
-        if want_fade and prev_bg is not None and prev_bg.size == (w, h):
-            fades = [Image.blend(prev_bg, bg, (i + 1) / FADE_STEPS)
-                     for i in range(FADE_STEPS)]
 
         ladder: List[Image.Image] = []
         orig = _open_rgba(logo)
@@ -256,10 +253,10 @@ class StageWindow:
         sig_fit = _fit(sig_img, int(w * 0.32), int(h * 0.18)) if sig_img is not None else None
 
         por = _open_rgba(portrait)
-        por_fit = _fit(por, int(w * 0.42), int(h * 0.72)) if por is not None else None
+        por_fit = _fit(por, int(w * 0.52), int(h * 0.82)) if por is not None else None
 
         return {
-            "size": (w, h), "bg": bg, "fades": fades, "ladder": ladder,
+            "size": (w, h), "bg": bg, "ladder": ladder,
             "logo_name": None if ladder else (hero or "Waiting for hero…"),
             "sig": sig_fit, "portrait": por_fit,
         }
@@ -273,43 +270,27 @@ class StageWindow:
         w, h = self.canvas.winfo_width(), self.canvas.winfo_height()
         if w <= 1 or h <= 1:
             return
+        self._cancel_anim()
         assets = self._render_assets(
             w, h, accent=self._shown_accent, main=self._shown_main,
             logo=self._shown_logo, sig=self._shown_sig, portrait=self._shown_portrait,
-            hero=self._shown_hero, prev_bg=None, want_fade=False)
-        self._paint(assets, animate=False)
+            hero=self._shown_hero)
+        self._paint(assets)
 
-    def _paint(self, assets: dict, animate: bool) -> None:
+    def _paint(self, assets: dict) -> None:
+        """Lay out the full Stage for the given assets (does not touch the wipe
+        cover, so it can be called mid-transition to swap behind the cover)."""
         if self._closed:
             return
-        self._cancel_anim()
         w, h = assets["size"]
         self._last_size = (w, h)
         self.canvas.delete("all")
         self._items.clear()
+        self._cover = None  # was deleted by delete("all"); caller recreates it
 
-        # Background. Wrap the new bg + only the first crossfade frame now; wrap
-        # the remaining (full-screen) fade frames lazily so we don't allocate a
-        # stack of large PhotoImages in a single UI frame.
         self._bg_img = assets["bg"]
         self._bg_photo = ImageTk.PhotoImage(self._bg_img)
-        self._fade_frames = []
-        self._fade_pil = []
-        if animate and assets["fades"]:
-            self._fade_frames = [ImageTk.PhotoImage(assets["fades"][0])]
-            self._fade_pil = list(assets["fades"][1:])
-            first_bg = self._fade_frames[0]
-        else:
-            first_bg = self._bg_photo
-        self._items["bg"] = self.canvas.create_image(0, 0, anchor="nw", image=first_bg)
-
-        # Portrait sits just above the background, behind everything else, so it
-        # sweeps in front of the glow but the logo stays the focal point.
-        self._portrait_photo = None
-        if animate and assets["portrait"] is not None:
-            self._portrait_photo = ImageTk.PhotoImage(assets["portrait"])
-            self._items["portrait"] = self.canvas.create_image(
-                -10000, h // 2, image=self._portrait_photo)  # off-screen until anim
+        self._items["bg"] = self.canvas.create_image(0, 0, anchor="nw", image=self._bg_photo)
 
         self._build_logo(w, h, assets)
         self._build_signature(w, h, assets)
@@ -320,19 +301,14 @@ class StageWindow:
             w - 12, h - 8, text="Double-click / F11 fullscreen · Esc exit",
             fill="#6b7178", anchor="se", font=("Segoe UI", max(9, int(h * 0.013))))
 
-        if animate:
-            self._start_anim(w, h)
-
     def _build_logo(self, w: int, h: int, assets: dict) -> None:
         cx, cy = w // 2, int(h * 0.46)
         ladder = assets["ladder"]
         self._logo_ladder = []
         self._ladder_pil = []
         if ladder:
-            # Wrap the base now; wrap the rest of the scale-ladder lazily over the
-            # next few UI frames so we never block on ~16 PhotoImage creations.
             self._logo_ladder.append(ImageTk.PhotoImage(ladder[0]))
-            self._ladder_pil = list(ladder[1:])
+            self._ladder_pil = list(ladder[1:])  # wrapped lazily in the loop
             self._items["logo"] = self.canvas.create_image(cx, cy, image=self._logo_ladder[0])
         else:
             name = assets["logo_name"] or "Waiting for hero…"
@@ -353,9 +329,8 @@ class StageWindow:
         self.canvas.create_image(w - pad, pad, image=self._sig_photo, anchor="ne")
 
     def _build_now_playing(self, w: int, h: int) -> None:
-        # Items are recreated empty; clear the "last shown" trackers so
-        # _update_now_playing refills them on the next tick (otherwise they'd
-        # stay blank after a rebuild, e.g. going fullscreen, until the next song).
+        # Recreated empty; clear "last shown" trackers so _update_now_playing
+        # refills them next tick (otherwise blank after a rebuild until next song).
         self._last_title = None
         self._last_artist = None
         self._art_url = ""
@@ -401,7 +376,6 @@ class StageWindow:
 
     # ----------------------------------------------------------- switching
     def _start_switch(self) -> None:
-        """Kick off a background render of the new hero's assets."""
         w, h = self._last_size
         if w <= 1 or h <= 1:
             return
@@ -410,7 +384,7 @@ class StageWindow:
         params = dict(
             w=w, h=h, accent=self._shown_accent, main=self._shown_main,
             logo=self._shown_logo, sig=self._shown_sig, portrait=self._shown_portrait,
-            hero=self._shown_hero, prev_bg=self._bg_img)
+            hero=self._shown_hero)
         threading.Thread(target=self._switch_worker, args=(seq, params),
                          name="stage-switch", daemon=True).start()
 
@@ -418,8 +392,7 @@ class StageWindow:
         try:
             assets = self._render_assets(
                 p["w"], p["h"], accent=p["accent"], main=p["main"], logo=p["logo"],
-                sig=p["sig"], portrait=p["portrait"], hero=p["hero"],
-                prev_bg=p["prev_bg"], want_fade=True)
+                sig=p["sig"], portrait=p["portrait"], hero=p["hero"])
         except Exception:
             return
         self._asset_q.put((seq, assets))
@@ -433,51 +406,110 @@ class StageWindow:
                     applied = assets
         except queue.Empty:
             pass
-        if applied is not None and not self._closed:
-            # Drop a result whose size no longer matches (window was resized
-            # while it rendered) — the resize already repainted at the new size.
-            if applied["size"] == self._last_size:
-                self._paint(applied, animate=True)
+        if applied is None or self._closed or applied["size"] != self._last_size:
+            return
+        if self._anim is None:
+            # No wipe running (e.g. a resize cancelled it) — paint directly, with
+            # no cover (there is nothing to slide away).
+            self._pending = None
+            self._paint(applied)
+            return
+        # A wipe is in progress. Stash the assets for the swap (done behind the
+        # cover) and prepare the portrait that will show on the cover.
+        self._pending = applied
+        self._cover_photo = (ImageTk.PhotoImage(applied["portrait"])
+                             if applied.get("portrait") is not None else None)
 
-    # ----------------------------------------------------------- animation
+    # ----------------------------------------------------------- wipe transition
+    def _begin_wipe(self) -> None:
+        """Start the cover-in immediately on a hero change (before the new assets
+        finish rendering), so the switch feels instant. The solid panel uses the
+        new hero's colour; the portrait is added when the swap happens."""
+        self._cancel_anim()
+        self._pending = None
+        self._cover_photo = None
+        w, _h = self._last_size
+        self._create_cover(w)                      # start fully off-screen right
+        self._anim = {"phase": "in", "t0": time.time()}
+
+    def _create_cover(self, x: int) -> None:
+        w, h = self._last_size
+        fill = theming.rgb_to_hex(theming.scale(self._shown_main, 0.32))
+        rect = self.canvas.create_rectangle(x, 0, x + w, h, fill=fill, width=0)
+        img = None
+        if self._cover_photo is not None:
+            img = self.canvas.create_image(x + w // 2, int(h * 0.5), image=self._cover_photo)
+        self._cover = {"rect": rect, "img": img}
+
+    def _move_cover(self, x: int) -> None:
+        if not self._cover:
+            return
+        w, h = self._last_size
+        self.canvas.coords(self._cover["rect"], x, 0, x + w, h)
+        if self._cover["img"] is not None:
+            self.canvas.coords(self._cover["img"], x + w // 2, int(h * 0.5))
+
+    def _destroy_cover(self) -> None:
+        if self._cover:
+            for key in ("rect", "img"):
+                item = self._cover.get(key)
+                if item is not None:
+                    try:
+                        self.canvas.delete(item)
+                    except Exception:
+                        pass
+            self._cover = None
+
+    def _apply_pending(self) -> None:
+        """Swap to the new hero behind the (full-screen) cover, then put the
+        cover back on top so the wipe-out can reveal the fresh Stage."""
+        assets, self._pending = self._pending, None
+        if assets is not None:
+            self._paint(assets)        # deletes everything incl. the cover
+        self._create_cover(0)          # recreate cover on top, full-screen
+
     def _cancel_anim(self) -> None:
         self._anim = None
-
-    def _start_anim(self, w: int, h: int) -> None:
-        a = {"t0": time.time(), "dur": ANIM_S}
-        if "portrait" in self._items and self._portrait_photo is not None:
-            pw = self._portrait_photo.width()
-            a["px0"] = w + pw // 2 + 30        # off-screen right
-            a["px1"] = -pw // 2 - 30           # off-screen left
-            a["py"] = int(h * 0.5)
-        self._anim = a
+        self._pending = None
+        self._destroy_cover()
 
     def _step_anim(self) -> None:
         a = self._anim
         if a is None:
             return
-        p = (time.time() - a["t0"]) / a["dur"]
-        if p >= 1.0:
-            # Settle the background on its retained final image, drop the portrait.
-            if "bg" in self._items and self._bg_photo is not None:
-                self.canvas.itemconfig(self._items["bg"], image=self._bg_photo)
-            if "portrait" in self._items:
-                self.canvas.delete(self._items.pop("portrait"))
-            self._portrait_photo = None
-            self._fade_frames = []
-            self._anim = None
-            return
-        e = _smoothstep(p)
-        if self._fade_frames:
-            # Timeline spans all FADE_STEPS frames; clamp to those wrapped so far.
-            idx = int(p * FADE_STEPS)
-            built = len(self._fade_frames) - 1
-            if idx > built:
-                idx = built
-            self.canvas.itemconfig(self._items["bg"], image=self._fade_frames[idx])
-        if "portrait" in self._items and "px0" in a:
-            x = a["px0"] + (a["px1"] - a["px0"]) * e
-            self.canvas.coords(self._items["portrait"], x, a["py"])
+        w, _h = self._last_size
+        now = time.time()
+        phase = a["phase"]
+        if phase == "in":
+            # Solid colour panel wipes in over the old Stage.
+            p = (now - a["t0"]) / T_IN
+            if p >= 1.0:
+                self._move_cover(0)            # fully covered
+                if self._pending is not None:
+                    self._apply_pending()      # assets ready: swap behind cover
+                    self._anim = {"phase": "show", "t0": now}
+                else:
+                    self._anim = {"phase": "wait", "t0": now}
+                return
+            self._move_cover(int(w * (1.0 - _smoothstep(p))))
+        elif phase == "wait":
+            # Fully covered, waiting for the (off-thread) assets to finish.
+            self._move_cover(0)
+            if self._pending is not None:
+                self._apply_pending()
+                self._anim = {"phase": "show", "t0": now}
+        elif phase == "show":
+            # Fully covered with the new hero's portrait — hold so it's seen.
+            self._move_cover(0)
+            if (now - a["t0"]) >= T_SHOW:
+                self._anim = {"phase": "out", "t0": now}
+        else:  # "out": slide the cover off to reveal the new Stage.
+            p = (now - a["t0"]) / T_OUT
+            if p >= 1.0:
+                self._destroy_cover()
+                self._anim = None
+                return
+            self._move_cover(int(-w * _smoothstep(p)))
 
     # ----------------------------------------------------------- loop
     def _sync_state(self) -> None:
@@ -498,26 +530,23 @@ class StageWindow:
             self._shown_sig = sig
             self._shown_portrait = portrait
             if had_render:
-                self._start_switch()        # animated, off-thread
-            # else: the first paint happens via _on_canvas_configure → _rebuild
+                self._begin_wipe()          # cover-in starts instantly
+                self._start_switch()        # render new assets off-thread
+            # else: first paint happens via _on_canvas_configure → _rebuild
 
     def _wrap_pending(self) -> None:
-        """Wrap a few queued fade/ladder frames into PhotoImages per UI frame so
-        the work is spread out instead of stalling one frame."""
-        n = LADDER_PER_FRAME
-        while n > 0 and self._fade_pil:
-            self._fade_frames.append(ImageTk.PhotoImage(self._fade_pil.pop(0)))
-            n -= 1
-        while n > 0 and self._ladder_pil:
+        """Wrap a few queued pulse-ladder frames per UI frame (spread the cost)."""
+        for _ in range(LADDER_PER_FRAME):
+            if not self._ladder_pil:
+                break
             self._logo_ladder.append(ImageTk.PhotoImage(self._ladder_pil.pop(0)))
-            n -= 1
 
     def _animate(self) -> None:
         if self._closed:
             return
         self._sync_state()
         self._poll_switch()
-        if self._fade_pil or self._ladder_pil:
+        if self._ladder_pil:
             self._wrap_pending()
         if self._anim is not None:
             self._step_anim()
