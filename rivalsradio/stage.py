@@ -1,18 +1,28 @@
 """The Stage: a performant, animated second-screen "now playing" view.
 
-Smoothness comes from two things:
+Why this is smooth (each item fixes a measured source of chop):
 
-1. **No UI-thread stall on a hero switch.** All the heavy per-switch image work
-   (background render + blur, the white logo's colour tint and pulse
-   scale-ladder, the portrait) runs on a **background thread** (pure PIL, which
-   releases the GIL), so the animation loop keeps running the old hero while the
-   new assets render. The UI thread only wraps finished images in ``PhotoImage``
-   (a few per frame) and moves canvas items.
+1. **1 ms timer resolution.** Windows quantizes Tk's ``after()`` to ~15.6 ms by
+   default, turning a requested 144 FPS into an uneven ~64. The Stage calls
+   ``timeBeginPeriod(1)`` while open so frames are actually delivered on time.
 
-2. **A masked wipe transition.** When the new assets are ready, the new hero's
-   portrait panel slides in to fully cover the Stage, the Stage is rebuilt to the
-   new hero *behind the cover* (so the rebuild's brief cost is invisible), then
-   the panel slides off to reveal it. The switch never looks frozen.
+2. **Drift-corrected frame pacing.** The loop self-schedules against
+   ``perf_counter`` (compute how late we are, sleep the remainder) instead of a
+   fixed ``after(7)``, so frame intervals stay even instead of accumulating
+   jitter.
+
+3. **No UI-thread stall on a hero switch.** All heavy per-switch image work
+   (background render + blur, logo tint + pulse scale-ladder, portrait) runs on
+   a background thread (pure PIL releases the GIL). The results are then
+   wrapped into ``PhotoImage``s **one step per frame** while the screen is
+   covered — never several full-screen wraps in a single frame.
+
+4. **A slanted cover wipe masks the swap.** On a hero change a slanted panel in
+   the hero's colour (with an accent leading edge) sweeps in instantly, the
+   Stage rebuilds behind it step-by-step, the new portrait holds with a subtle
+   drift, then the panel sweeps off revealing the finished Stage. While the
+   panel moves, the underlying animations pause so the panel is the only damage
+   the canvas repaints — the sweep itself stays fluid even at 4K.
 
 The steady-state loop is allocation-free: the logo pulse is an index into the
 pre-rendered ladder; the bars only move ``coords``.
@@ -30,7 +40,7 @@ import sys
 import threading
 import time
 import tkinter as tk
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from PIL import Image, ImageChops, ImageTk
 
@@ -43,10 +53,12 @@ from . import nowplaying
 
 PULSE_STEPS = 16           # pre-rendered logo scales (1.0 → PULSE_MAX)
 PULSE_MAX = 1.16           # biggest logo scale at peak bass
-T_IN = 0.28                # wipe-in (cover) duration, seconds
-T_SHOW = 0.30              # hold the portrait on screen (fully covered), seconds
-T_OUT = 0.34               # wipe-out (reveal) duration, seconds
-LADDER_PER_FRAME = 3       # how many ladder PhotoImages to wrap per UI frame
+T_IN = 0.32                # cover sweep-in duration, seconds
+T_SHOW = 0.55              # portrait hold while covered, seconds
+T_OUT = 0.38               # cover sweep-out (reveal) duration, seconds
+SLANT_FRAC = 0.10          # slant of the cover's edges, as a fraction of width
+EDGE_FRAC = 0.008          # accent edge stripe width, as a fraction of width
+LADDER_PER_FRAME = 3       # ladder PhotoImages wrapped per UI frame
 
 
 # --- pure-PIL helpers (safe to call off the main thread) -------------------
@@ -87,7 +99,19 @@ class StageWindow:
         self.visualizer = visualizer
 
         self._fps = max(30, min(160, int(getattr(cfg, "stage_fps", 144))))
-        self._frame_ms = max(6, int(round(1000.0 / self._fps)))
+        self._frame_s = 1.0 / self._fps
+        self._next_frame = time.perf_counter()
+
+        # Windows quantizes Tk timers to ~15.6ms without this; 1ms resolution is
+        # what makes high-FPS animation via after() possible at all.
+        self._timer_boosted = False
+        if sys.platform.startswith("win"):
+            try:
+                import ctypes
+                ctypes.windll.winmm.timeBeginPeriod(1)
+                self._timer_boosted = True
+            except Exception:
+                pass
 
         self.top = tk.Toplevel(parent)
         self.top.title("RivalsRadio — Stage")
@@ -106,11 +130,11 @@ class StageWindow:
         self._shown_sig: Optional[str] = None
         self._shown_portrait: Optional[str] = None
 
-        # Retained PhotoImages / PIL (canvas only holds weak refs).
+        # Retained PhotoImages / PIL (canvas holds only weak refs).
         self._bg_img: Optional[Image.Image] = None
         self._bg_photo: Optional[ImageTk.PhotoImage] = None
         self._logo_ladder: List[ImageTk.PhotoImage] = []
-        self._ladder_pil: List[Image.Image] = []     # not-yet-wrapped pulse frames
+        self._ladder_pil: List[Image.Image] = []
         self._sig_photo: Optional[ImageTk.PhotoImage] = None
         self._art_photo: Optional[ImageTk.PhotoImage] = None
         self._cover_photo: Optional[ImageTk.PhotoImage] = None
@@ -119,9 +143,9 @@ class StageWindow:
         # Async switch + transition plumbing.
         self._asset_q: "queue.Queue[Tuple[int, dict]]" = queue.Queue()
         self._switch_seq = 0
-        self._anim: Optional[dict] = None             # active wipe transition
-        self._pending: Optional[dict] = None          # assets to paint mid-wipe
-        self._cover: Optional[dict] = None            # cover canvas items
+        self._anim: Optional[dict] = None
+        self._swap_steps: List[Callable[[], None]] = []
+        self._cover: Optional[dict] = None
 
         # Per-frame live state.
         self._pulse = 0.0
@@ -149,6 +173,12 @@ class StageWindow:
         if self._closed:
             return
         self._closed = True
+        if self._timer_boosted:
+            try:
+                import ctypes
+                ctypes.windll.winmm.timeEndPeriod(1)
+            except Exception:
+                pass
         try:
             self.top.destroy()
         except tk.TclError:
@@ -160,7 +190,7 @@ class StageWindow:
 
     def set_fps(self, fps: int) -> None:
         self._fps = max(30, min(160, int(fps)))
-        self._frame_ms = max(6, int(round(1000.0 / self._fps)))
+        self._frame_s = 1.0 / self._fps
 
     # --------------------------------------------------------------- window
     def _toggle_fullscreen(self, _event=None) -> None:
@@ -234,7 +264,7 @@ class StageWindow:
     # ----------------------------------------------------------- assets (PIL)
     def _render_assets(self, w: int, h: int, *, accent, main, logo, sig, portrait,
                        hero) -> dict:
-        """Build all the per-state images. Pure PIL — no Tk — safe off-thread."""
+        """Build all per-state images. Pure PIL — no Tk — safe off-thread."""
         bg = render_background(w, h, accent, None, main=accent)
 
         ladder: List[Image.Image] = []
@@ -253,7 +283,7 @@ class StageWindow:
         sig_fit = _fit(sig_img, int(w * 0.32), int(h * 0.18)) if sig_img is not None else None
 
         por = _open_rgba(portrait)
-        por_fit = _fit(por, int(w * 0.52), int(h * 0.82)) if por is not None else None
+        por_fit = _fit(por, int(w * 0.52), int(h * 0.84)) if por is not None else None
 
         return {
             "size": (w, h), "bg": bg, "ladder": ladder,
@@ -263,7 +293,7 @@ class StageWindow:
 
     # ----------------------------------------------------------- paint (Tk)
     def _rebuild(self, _crossfade: bool = False) -> None:
-        """Synchronous (re)paint for the initial render and resizes."""
+        """Synchronous (re)paint — initial render and resizes only."""
         if self._closed:
             return
         self._resize_after = None
@@ -275,25 +305,29 @@ class StageWindow:
             w, h, accent=self._shown_accent, main=self._shown_main,
             logo=self._shown_logo, sig=self._shown_sig, portrait=self._shown_portrait,
             hero=self._shown_hero)
-        self._paint(assets)
+        self._bg_photo = ImageTk.PhotoImage(assets["bg"])
+        self._sig_photo = (ImageTk.PhotoImage(assets["sig"])
+                           if assets["sig"] is not None else None)
+        self._paint_items(assets)
 
-    def _paint(self, assets: dict) -> None:
-        """Lay out the full Stage for the given assets (does not touch the wipe
-        cover, so it can be called mid-transition to swap behind the cover)."""
+    def _paint_items(self, assets: dict) -> None:
+        """Create every canvas item for `assets`. Assumes self._bg_photo (and
+        self._sig_photo, if any) are already wrapped — so this call itself is
+        cheap creates, no big allocations."""
         if self._closed:
             return
         w, h = assets["size"]
         self._last_size = (w, h)
+        self._bg_img = assets["bg"]
         self.canvas.delete("all")
         self._items.clear()
-        self._cover = None  # was deleted by delete("all"); caller recreates it
+        self._cover = None   # delete("all") removed it; caller recreates if needed
 
-        self._bg_img = assets["bg"]
-        self._bg_photo = ImageTk.PhotoImage(self._bg_img)
         self._items["bg"] = self.canvas.create_image(0, 0, anchor="nw", image=self._bg_photo)
-
         self._build_logo(w, h, assets)
-        self._build_signature(w, h, assets)
+        if self._sig_photo is not None:
+            pad = int(h * 0.04)
+            self.canvas.create_image(w - pad, pad, image=self._sig_photo, anchor="ne")
         if self.cfg.show_now_playing:
             self._build_now_playing(w, h)
         self._build_visualizer(w, h)
@@ -308,7 +342,7 @@ class StageWindow:
         self._ladder_pil = []
         if ladder:
             self._logo_ladder.append(ImageTk.PhotoImage(ladder[0]))
-            self._ladder_pil = list(ladder[1:])  # wrapped lazily in the loop
+            self._ladder_pil = list(ladder[1:])   # wrapped lazily by the loop
             self._items["logo"] = self.canvas.create_image(cx, cy, image=self._logo_ladder[0])
         else:
             name = assets["logo_name"] or "Waiting for hero…"
@@ -319,18 +353,10 @@ class StageWindow:
             self._items["logo_txt"] = self.canvas.create_text(
                 cx, cy, text=name, fill=tint, font=("Segoe UI", size, "bold"))
 
-    def _build_signature(self, w: int, h: int, assets: dict) -> None:
-        sig = assets["sig"]
-        if sig is None:
-            self._sig_photo = None
-            return
-        pad = int(h * 0.04)
-        self._sig_photo = ImageTk.PhotoImage(sig)
-        self.canvas.create_image(w - pad, pad, image=self._sig_photo, anchor="ne")
-
     def _build_now_playing(self, w: int, h: int) -> None:
-        # Recreated empty; clear "last shown" trackers so _update_now_playing
-        # refills them next tick (otherwise blank after a rebuild until next song).
+        # Items are recreated empty; reset the "last shown" trackers so the next
+        # tick repopulates them (otherwise blank after a rebuild until the next
+        # song).
         self._last_title = None
         self._last_artist = None
         self._art_url = ""
@@ -409,49 +435,84 @@ class StageWindow:
         if applied is None or self._closed or applied["size"] != self._last_size:
             return
         if self._anim is None:
-            # No wipe running (e.g. a resize cancelled it) — paint directly, with
-            # no cover (there is nothing to slide away).
-            self._pending = None
-            self._paint(applied)
+            # No wipe running (e.g. cancelled by a resize): paint directly.
+            self._bg_photo = ImageTk.PhotoImage(applied["bg"])
+            self._sig_photo = (ImageTk.PhotoImage(applied["sig"])
+                               if applied["sig"] is not None else None)
+            self._paint_items(applied)
             return
-        # A wipe is in progress. Stash the assets for the swap (done behind the
-        # cover) and prepare the portrait that will show on the cover.
-        self._pending = applied
-        self._cover_photo = (ImageTk.PhotoImage(applied["portrait"])
-                             if applied.get("portrait") is not None else None)
+        # Queue the swap as one-step-per-frame work, done while covered. The
+        # portrait wrap is its own step too, so no frame ever does two wraps.
+        self._queue_swap_steps(applied)
 
-    # ----------------------------------------------------------- wipe transition
-    def _begin_wipe(self) -> None:
-        """Start the cover-in immediately on a hero change (before the new assets
-        finish rendering), so the switch feels instant. The solid panel uses the
-        new hero's colour; the portrait is added when the swap happens."""
-        self._cancel_anim()
-        self._pending = None
-        self._cover_photo = None
-        w, _h = self._last_size
-        self._create_cover(w)                      # start fully off-screen right
-        self._anim = {"phase": "in", "t0": time.time()}
+    def _queue_swap_steps(self, assets: dict) -> None:
+        steps: List[Callable[[], None]] = []
+
+        def wrap_portrait():
+            self._cover_photo = (ImageTk.PhotoImage(assets["portrait"])
+                                 if assets.get("portrait") is not None else None)
+
+        def wrap_bg():
+            self._bg_photo = ImageTk.PhotoImage(assets["bg"])
+
+        def wrap_sig():
+            self._sig_photo = (ImageTk.PhotoImage(assets["sig"])
+                               if assets["sig"] is not None else None)
+
+        def repaint():
+            self._paint_items(assets)      # cheap creates (images pre-wrapped)
+            self._create_cover(-self._slant())   # cover back on top, covering
+
+        steps.extend([wrap_portrait, wrap_bg, wrap_sig, repaint])
+        self._swap_steps = steps
+
+    # ----------------------------------------------------------- cover wipe
+    def _slant(self) -> int:
+        return max(24, int(self._last_size[0] * SLANT_FRAC))
+
+    def _cover_colors(self) -> Tuple[str, str]:
+        panel = theming.rgb_to_hex(theming.scale(self._shown_main, 0.30))
+        edge = theming.rgb_to_hex(self._shown_accent)
+        return panel, edge
 
     def _create_cover(self, x: int) -> None:
+        """A slanted panel (parallelogram, width w+slant) with an accent leading
+        edge and the hero portrait. x = position of its bottom-left corner.
+        Fully covering at x == -slant."""
         w, h = self._last_size
-        fill = theming.rgb_to_hex(theming.scale(self._shown_main, 0.32))
-        rect = self.canvas.create_rectangle(x, 0, x + w, h, fill=fill, width=0)
+        s = self._slant()
+        e = max(4, int(w * EDGE_FRAC))
+        panel_fill, edge_fill = self._cover_colors()
+        panel = self.canvas.create_polygon(
+            x + s, 0, x + w + 2 * s, 0, x + w + s, h, x, h,
+            fill=panel_fill, width=0)
+        edge = self.canvas.create_polygon(
+            x + s, 0, x + s + e, 0, x + e, h, x, h,
+            fill=edge_fill, width=0)
         img = None
         if self._cover_photo is not None:
-            img = self.canvas.create_image(x + w // 2, int(h * 0.5), image=self._cover_photo)
-        self._cover = {"rect": rect, "img": img}
+            img = self.canvas.create_image(
+                x + s + w // 2, int(h * 0.5), image=self._cover_photo)
+        self._cover = {"panel": panel, "edge": edge, "img": img, "x": x}
 
-    def _move_cover(self, x: int) -> None:
+    def _move_cover(self, x: int, dy: int = 0) -> None:
         if not self._cover:
             return
         w, h = self._last_size
-        self.canvas.coords(self._cover["rect"], x, 0, x + w, h)
+        s = self._slant()
+        e = max(4, int(w * EDGE_FRAC))
+        self.canvas.coords(self._cover["panel"],
+                           x + s, 0, x + w + 2 * s, 0, x + w + s, h, x, h)
+        self.canvas.coords(self._cover["edge"],
+                           x + s, 0, x + s + e, 0, x + e, h, x, h)
         if self._cover["img"] is not None:
-            self.canvas.coords(self._cover["img"], x + w // 2, int(h * 0.5))
+            self.canvas.coords(self._cover["img"],
+                               x + s + w // 2, int(h * 0.5) + dy)
+        self._cover["x"] = x
 
     def _destroy_cover(self) -> None:
         if self._cover:
-            for key in ("rect", "img"):
+            for key in ("panel", "edge", "img"):
                 item = self._cover.get(key)
                 if item is not None:
                     try:
@@ -459,18 +520,20 @@ class StageWindow:
                     except Exception:
                         pass
             self._cover = None
+        self._cover_photo = None
 
-    def _apply_pending(self) -> None:
-        """Swap to the new hero behind the (full-screen) cover, then put the
-        cover back on top so the wipe-out can reveal the fresh Stage."""
-        assets, self._pending = self._pending, None
-        if assets is not None:
-            self._paint(assets)        # deletes everything incl. the cover
-        self._create_cover(0)          # recreate cover on top, full-screen
+    def _begin_wipe(self) -> None:
+        """Start the cover sweep immediately on a hero change — before the new
+        assets exist — so the switch feels instant."""
+        self._cancel_anim()
+        w, _h = self._last_size
+        self._cover_photo = None
+        self._create_cover(w)              # fully off-screen right
+        self._anim = {"phase": "in", "t0": time.perf_counter()}
 
     def _cancel_anim(self) -> None:
         self._anim = None
-        self._pending = None
+        self._swap_steps = []
         self._destroy_cover()
 
     def _step_anim(self) -> None:
@@ -478,38 +541,48 @@ class StageWindow:
         if a is None:
             return
         w, _h = self._last_size
-        now = time.time()
+        s = self._slant()
+        now = time.perf_counter()
         phase = a["phase"]
+
         if phase == "in":
-            # Solid colour panel wipes in over the old Stage.
+            # Sweep from x=w (off right) to x=-s (fully covering).
             p = (now - a["t0"]) / T_IN
             if p >= 1.0:
-                self._move_cover(0)            # fully covered
-                if self._pending is not None:
-                    self._apply_pending()      # assets ready: swap behind cover
-                    self._anim = {"phase": "show", "t0": now}
-                else:
-                    self._anim = {"phase": "wait", "t0": now}
+                self._move_cover(-s)
+                self._anim = {"phase": "swap", "t0": now}
                 return
-            self._move_cover(int(w * (1.0 - _smoothstep(p))))
-        elif phase == "wait":
-            # Fully covered, waiting for the (off-thread) assets to finish.
-            self._move_cover(0)
-            if self._pending is not None:
-                self._apply_pending()
-                self._anim = {"phase": "show", "t0": now}
+            self._move_cover(int(w - (w + s) * _smoothstep(p)))
+
+        elif phase == "swap":
+            # Fully covered. One swap step per frame (each is at most one big
+            # PhotoImage wrap), so no single frame stalls.
+            if self._swap_steps:
+                step = self._swap_steps.pop(0)
+                try:
+                    step()
+                except Exception:
+                    self._swap_steps = []
+                if not self._swap_steps:
+                    self._anim = {"phase": "show", "t0": time.perf_counter()}
+            # else: assets not ready yet — hold covered until they arrive.
+
         elif phase == "show":
-            # Fully covered with the new hero's portrait — hold so it's seen.
-            self._move_cover(0)
-            if (now - a["t0"]) >= T_SHOW:
+            # Hold the portrait; give it a slow upward drift so it feels alive.
+            p = (now - a["t0"]) / T_SHOW
+            if p >= 1.0:
                 self._anim = {"phase": "out", "t0": now}
-        else:  # "out": slide the cover off to reveal the new Stage.
+                return
+            drift = int(-self._last_size[1] * 0.015 * _smoothstep(p))
+            self._move_cover(-s, dy=drift)
+
+        else:  # "out": sweep from -s to fully off-left, revealing the new Stage.
             p = (now - a["t0"]) / T_OUT
             if p >= 1.0:
                 self._destroy_cover()
                 self._anim = None
                 return
-            self._move_cover(int(-w * _smoothstep(p)))
+            self._move_cover(int(-s - (w + 2 * s) * _smoothstep(p)))
 
     # ----------------------------------------------------------- loop
     def _sync_state(self) -> None:
@@ -530,12 +603,11 @@ class StageWindow:
             self._shown_sig = sig
             self._shown_portrait = portrait
             if had_render:
-                self._begin_wipe()          # cover-in starts instantly
-                self._start_switch()        # render new assets off-thread
+                self._begin_wipe()          # sweep starts this very frame
+                self._start_switch()        # assets render off-thread
             # else: first paint happens via _on_canvas_configure → _rebuild
 
-    def _wrap_pending(self) -> None:
-        """Wrap a few queued pulse-ladder frames per UI frame (spread the cost)."""
+    def _wrap_pending_ladder(self) -> None:
         for _ in range(LADDER_PER_FRAME):
             if not self._ladder_pil:
                 break
@@ -546,15 +618,28 @@ class StageWindow:
             return
         self._sync_state()
         self._poll_switch()
-        if self._ladder_pil:
-            self._wrap_pending()
+
         if self._anim is not None:
+            # Transition frames: the cover is the ONLY thing that moves. Pausing
+            # the underlying animations keeps the canvas damage small so the
+            # sweep itself renders fluidly even on large screens.
             self._step_anim()
-        self._update_logo_pulse()
-        if self.cfg.show_now_playing:
-            self._update_now_playing()
-        self._update_visualizer()
-        self.top.after(self._frame_ms, self._animate)
+        else:
+            if self._ladder_pil:
+                self._wrap_pending_ladder()
+            self._update_logo_pulse()
+            if self.cfg.show_now_playing:
+                self._update_now_playing()
+            self._update_visualizer()
+
+        # Drift-corrected pacing: schedule relative to the ideal timeline, not
+        # a fixed interval, so jitter doesn't accumulate.
+        self._next_frame += self._frame_s
+        now = time.perf_counter()
+        if self._next_frame < now - 3 * self._frame_s:   # fell far behind: resync
+            self._next_frame = now + self._frame_s
+        delay_ms = max(1, int((self._next_frame - now) * 1000))
+        self.top.after(delay_ms, self._animate)
 
     def _audio_level(self) -> float:
         try:
