@@ -436,6 +436,7 @@ class App:
             self.manual_menu.configure(values=names)
             if self.manual_hero_var.get() not in names:
                 self.manual_hero_var.set(names[0])
+        self._push_roster()
 
     def _hero_logo_thumb(self, hero: str, px: int):
         """Cached, main-colour-tinted logo thumbnail for the Heroes list."""
@@ -612,6 +613,17 @@ class App:
 
         # Stage & overlay.
         pf = self._card(scroll, "Stage & overlay")
+        lrow = ctk.CTkFrame(pf, fg_color="transparent")
+        lrow.pack(fill="x", padx=18, pady=6)
+        ctk.CTkLabel(lrow, text="Visualizer layout", font=self.f_body, text_color=MUTED,
+                     width=180, anchor="w").pack(side="left")
+        self.style_var = tk.StringVar(value=self.cfg.stage_style)
+        ctk.CTkOptionMenu(lrow, values=["bars", "radial"], variable=self.style_var,
+                          command=lambda _v: self._apply_style_change(),
+                          width=140, height=34, corner_radius=8, fg_color=CARD_HI,
+                          button_color="#2c2f36", button_hover_color="#343841").pack(side="left")
+        ctk.CTkLabel(lrow, text="bars = bottom · radial = around the logo",
+                     font=self.f_small, text_color=FAINT).pack(side="left", padx=10)
         frow = ctk.CTkFrame(pf, fg_color="transparent")
         frow.pack(fill="x", padx=18, pady=6)
         ctk.CTkLabel(frow, text="Visualizer FPS", font=self.f_body, text_color=MUTED,
@@ -696,7 +708,30 @@ class App:
             self._persist_hero_edits()
             self._render_hero_rows()
         self._refresh_status()
+        # Feed the Stage's idle/takeover displays (~1 Hz is plenty).
+        now = time.time()
+        if now - getattr(self, "_last_session_push", 0) > 1.0:
+            self._last_session_push = now
+            self._push_session()
         self.root.after(250, self._drain_queues)
+
+    def _push_session(self) -> None:
+        s = self.session_stats.snapshot()
+        self.state.set_session({
+            "playtime": self._fmt_dur(s["duration"]),
+            "matches": s["matches"], "wins": s["wins"], "losses": s["losses"],
+        })
+
+    def _push_roster(self) -> None:
+        roster = []
+        for hero in sorted(self.cfg.heroes):
+            roster.append({
+                "hero": hero,
+                "portrait": self.cfg.portrait_path(hero),
+                "main": self._effective_main(hero),
+                "accent": self._effective_accent(hero),
+            })
+        self.state.set_roster(roster)
 
     def _append_log(self, message: str) -> None:
         ts = time.strftime("%H:%M:%S")
@@ -783,6 +818,12 @@ class App:
             self.monitor.start()
             self._refresh_status()
 
+    def _apply_style_change(self) -> None:
+        """Persist the visualizer layout immediately — the Stage reads it live."""
+        self.cfg.stage_style = self.style_var.get()
+        self.cfg.save()
+        self._append_log(f"Visualizer layout set to '{self.cfg.stage_style}'.")
+
     def _toggle_gep_debug(self) -> None:
         self.cfg.gep_debug = bool(self.gep_debug_var.get())
         self.cfg.save()
@@ -828,9 +869,9 @@ class App:
 
     def _open_stage(self) -> None:
         if self.stage and self.stage.alive:
-            self.stage.top.deiconify()
-            self.stage.top.lift()
+            self.stage.focus()
             return
+        self._push_roster()
         self.stage = StageWindow(self.root, self.state, self.cfg, self.visualizer)
         if not self.visualizer.available:
             self._append_log("Stage opened — audio backend unavailable, bars will idle "
@@ -854,9 +895,13 @@ class App:
         etype = event.get("type")
         if etype == "match" and event.get("result"):
             self.session_stats.note_match_result(event["result"])
+            self._push_session()
+            self.state.set_match(event["result"])   # Stage takeover moment
             self._append_log(f"Match {event['result']} recorded.")
         elif etype == "stats":
             self.session_stats.note_kda(
+                event.get("kills", 0), event.get("deaths", 0), event.get("assists", 0))
+            self.state.set_kda(
                 event.get("kills", 0), event.get("deaths", 0), event.get("assists", 0))
         elif etype == "game":
             self._game_running = bool(event.get("running"))
@@ -1077,6 +1122,7 @@ class App:
             messagebox.showwarning("Settings", "Numeric fields must be numbers.")
             return
         self.cfg.show_now_playing = bool(self.nowplaying_var.get())
+        self.cfg.stage_style = self.style_var.get()
         self.cfg.hero_source = self.source_var.get()
         self.cfg.gep_bridge_cmd = self.bridge_cmd_var.get().strip()
         self.cfg.gep_packages_url = self.pkg_url_var.get().strip()

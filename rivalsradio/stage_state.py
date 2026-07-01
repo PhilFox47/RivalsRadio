@@ -43,10 +43,35 @@ class StageState:
         self.accent_hex: str = "#1DB954"
         self.main_hex: str = "#0d3a22"
         self.track = TrackInfo()
+        # Live game data for the Stage's KDA strip / match takeover.
+        self.kda = (0, 0, 0)
+        self.match_result: str = ""
+        self.match_seq = 0            # bumped per result so the Stage triggers once
+        # Session summary (playtime, W–L, …) pushed periodically by the app.
+        self.session: dict = {}
+        # Roster (hero, portrait path, colours) for the idle showcase.
+        self.roster: list = []
         self._visualizer = None  # set via attach_visualizer
 
     def attach_visualizer(self, visualizer) -> None:
         self._visualizer = visualizer
+
+    def set_kda(self, kills: int, deaths: int, assists: int) -> None:
+        with self._lock:
+            self.kda = (int(kills), int(deaths), int(assists))
+
+    def set_match(self, result: str) -> None:
+        with self._lock:
+            self.match_result = result
+            self.match_seq += 1
+
+    def set_session(self, session: dict) -> None:
+        with self._lock:
+            self.session = dict(session)
+
+    def set_roster(self, roster: list) -> None:
+        with self._lock:
+            self.roster = list(roster)
 
     def set_hero(self, hero: str, avatar_path: Optional[str], accent_hex: str,
                  logo_path: Optional[str] = None,

@@ -28,6 +28,7 @@ a = Analysis(
         "cffi",
         "customtkinter",
         "darkdetect",
+        "pygame",
     ],
     hookspath=[],
     hooksconfig={},
