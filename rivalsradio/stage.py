@@ -133,15 +133,30 @@ def _radial_sprite(size: int, rgb, core: float = 1.0) -> Image.Image:
     return Image.fromarray(arr, "RGB")
 
 
-def _ring_sprite(size: int, rgb, radius_frac: float = 0.86,
-                 width_frac: float = 0.10) -> Image.Image:
-    """Soft glowing ring baked into RGB (for additive blits)."""
-    y, x = np.mgrid[0:size, 0:size].astype(np.float32)
-    c = (size - 1) / 2.0
-    d = np.sqrt((x - c) ** 2 + (y - c) ** 2) / c
-    ring = np.exp(-((d - radius_frac) ** 2) / (2 * width_frac ** 2))
-    arr = (ring[..., None] * np.array(rgb, np.float32)[None, None]).astype(np.uint8)
-    return Image.fromarray(arr, "RGB")
+def _render_photo_bg(path: str, w: int, h: int, blur: int) -> Optional[Image.Image]:
+    """Cover-fit a hero background picture to (w, h), blur and darken it so the
+    foreground (logo, text, bars) stays readable."""
+    img = _open_rgba(path)
+    if img is None:
+        return None
+    img = img.convert("RGB")
+    r = max(w / img.width, h / img.height)
+    img = img.resize((max(1, int(img.width * r)), max(1, int(img.height * r))),
+                     Image.LANCZOS)
+    x = (img.width - w) // 2
+    y = (img.height - h) // 2
+    img = img.crop((x, y, x + w, y + h))
+    if blur > 0:
+        # Blur at a reduced size — visually identical, much cheaper at 4K.
+        cap = 1280
+        if max(w, h) > cap:
+            s = cap / max(w, h)
+            small = img.resize((max(1, int(w * s)), max(1, int(h * s))), Image.BILINEAR)
+            small = small.filter(ImageFilter.GaussianBlur(max(1, int(blur * s))))
+            img = small.resize((w, h), Image.BILINEAR)
+        else:
+            img = img.filter(ImageFilter.GaussianBlur(blur))
+    return Image.eval(img, lambda v: int(v * 0.52))
 
 
 def _vignette_sprite(w: int, h: int, rgb) -> Image.Image:
@@ -204,6 +219,10 @@ class StageWindow:
     def focus(self) -> None:
         self._focus_req = True
 
+    def refresh(self) -> None:
+        """Re-render assets (e.g. after the background-blur setting changed)."""
+        self._refresh_req = True
+
     # ------------------------------------------------------------- thread
     def _run(self) -> None:
         try:
@@ -256,10 +275,11 @@ class StageWindow:
         self._logo_path = None
         self._sig_path = None
         self._portrait_path = None
+        self._bgimg_path = None
 
         # Surfaces (rebuilt per hero/size).
         self._bg = None
-        self._ring = None
+        self._has_photo_bg = False
         self._vignette = None
         self._ladder: List = []
         self._sig = None
@@ -269,10 +289,14 @@ class StageWindow:
         self._album_rgb = None
         self._art_surf = None
 
-        # Async asset pipeline.
+        # Async asset pipeline. Steps run one per frame, always — a batch is
+        # "applied" once its steps finish (_applied_seq catches up to _seq).
         self._asset_q: "queue.Queue[Tuple[int, dict]]" = queue.Queue()
         self._seq = 0
+        self._applied_seq = 0
+        self._pending_seq = 0
         self._steps: List = []
+        self._refresh_req = False
 
         # Animation state.
         self._anim: Optional[dict] = None       # wipe
@@ -299,6 +323,9 @@ class StageWindow:
             if self._focus_req:
                 self._focus_req = False
                 self._raise_window()
+            if self._refresh_req:
+                self._refresh_req = False
+                self._request_assets()
             self._poll_assets()
             self._sync_state()
             self._draw()
@@ -421,11 +448,18 @@ class StageWindow:
         self._seq += 1
         seq = self._seq
         p = dict(w=self.W, h=self.H, main=self._main, accent=self._accent,
-                 logo=self._logo_path, sig=self._sig_path, por=self._portrait_path)
+                 logo=self._logo_path, sig=self._sig_path, por=self._portrait_path,
+                 bgimg=self._bgimg_path,
+                 blur=max(0, int(getattr(self.cfg, "stage_bg_blur", 12))))
 
         def work():
             try:
-                bg = _render_bg(p["w"], p["h"], p["main"], p["accent"])
+                bg = None
+                if p["bgimg"]:
+                    bg = _render_photo_bg(p["bgimg"], p["w"], p["h"], p["blur"])
+                photo = bg is not None
+                if bg is None:
+                    bg = _render_bg(p["w"], p["h"], p["main"], p["accent"])
                 ladder = []
                 logo = _open_rgba(p["logo"])
                 if logo is not None:
@@ -447,14 +481,11 @@ class StageWindow:
                 if por is not None:
                     f = _fit(por, int(p["w"] * 0.52), int(p["h"] * 0.84))
                     por_t = (f.tobytes(), f.size)
-                ring_d = int(min(p["w"], p["h"]) * 0.62)
-                ring = _ring_sprite(ring_d, p["accent"])
                 vig = _vignette_sprite(p["w"], p["h"], p["accent"])
                 self._asset_q.put((seq, dict(
                     size=(p["w"], p["h"]),
-                    bg=(bg.tobytes(), bg.size),
+                    bg=(bg.tobytes(), bg.size), photo=photo,
                     ladder=ladder, sig=sig_t, por=por_t,
-                    ring=(ring.tobytes(), ring.size),
                     vig=(vig.tobytes(), vig.size))))
             except Exception:
                 pass
@@ -473,39 +504,54 @@ class StageWindow:
 
     def _poll_assets(self) -> None:
         got = None
+        got_seq = 0
         try:
             while True:
                 seq, a = self._asset_q.get_nowait()
                 if seq == self._seq:
-                    got = a
+                    got, got_seq = a, seq
         except queue.Empty:
             pass
         if got is None or got["size"] != (self.W, self.H):
             return
-        # Spread the surface conversions over frames (one per frame) so the
-        # swap never produces a long frame — the wipe covers the interim.
+        # Spread the surface conversions over frames (one per frame) so applying
+        # a batch never produces a long frame. These steps replace any stale
+        # queued steps from a superseded batch.
         a = got
-        self._steps = [
-            lambda: setattr(self, "_bg", self._surf_rgb(a["bg"])),
-            lambda: setattr(self, "_portrait", self._surf_rgba(a["por"])),
-            lambda: setattr(self, "_ladder",
-                            [self._surf_rgba(fr) for fr in a["ladder"][:1]]) or
-                    setattr(self, "_ladder_pending", a["ladder"][1:]),
-            lambda: setattr(self, "_sig", self._surf_rgba(a["sig"])),
-            lambda: (setattr(self, "_ring", self._surf_rgb(a["ring"])),
-                     setattr(self, "_vignette", self._surf_rgb(a["vig"]))),
-        ]
+
+        def take_portrait():
+            self._portrait = self._surf_rgba(a["por"])
+
+        def take_ladder():
+            self._ladder = [self._surf_rgba(fr) for fr in a["ladder"][:1]]
+            self._ladder_pending = a["ladder"][1:]
+
+        def take_bg():
+            self._bg = self._surf_rgb(a["bg"])
+            self._has_photo_bg = bool(a.get("photo"))
+
+        def take_sig():
+            self._sig = self._surf_rgba(a["sig"])
+
+        def take_vig():
+            self._vignette = self._surf_rgb(a["vig"])
+
+        # Portrait first: the wipe wants it as early as possible.
+        self._steps = [take_portrait, take_bg, take_ladder, take_sig, take_vig]
+        self._pending_seq = got_seq
         self._dots = []   # re-tint particles to the (possibly new) accent
 
-    def _run_steps(self) -> bool:
-        """Run one pending asset step; True when none remain."""
-        if self._steps:
-            step = self._steps.pop(0)
-            try:
-                step()
-            except Exception:
-                self._steps = []
-        return not self._steps
+    def _run_steps(self) -> None:
+        """Run one pending asset step per frame (always, wipe or not)."""
+        if not self._steps:
+            return
+        step = self._steps.pop(0)
+        try:
+            step()
+        except Exception:
+            self._steps = []
+        if not self._steps:
+            self._applied_seq = self._pending_seq
 
     def _wrap_ladder_lazily(self) -> None:
         pend = getattr(self, "_ladder_pending", None)
@@ -524,7 +570,8 @@ class StageWindow:
         main = theming.hex_to_rgb(st.main_hex)
         if (hero != self._hero or accent != self._accent or main != self._main
                 or st.logo_path != self._logo_path or st.signature_path != self._sig_path
-                or st.portrait_path != self._portrait_path):
+                or st.portrait_path != self._portrait_path
+                or st.background_path != self._bgimg_path):
             first = self._hero is None and self._bg is None
             self._hero = hero
             self._accent = accent
@@ -532,6 +579,7 @@ class StageWindow:
             self._logo_path = st.logo_path
             self._sig_path = st.signature_path
             self._portrait_path = st.portrait_path
+            self._bgimg_path = st.background_path
             self._request_assets()
             if not first:
                 self._anim = {"phase": "in", "t0": time.perf_counter()}
@@ -609,10 +657,10 @@ class StageWindow:
         dt = min(0.05, self.clock.get_time() / 1000.0) or (1.0 / self._fps)
         in_wipe = self._anim is not None
 
-        if in_wipe and self._anim["phase"] in ("swap", "wait"):
-            done = self._run_steps()
-            if done:
-                self._anim = {"phase": "show", "t0": time.perf_counter()}
+        # Apply pending assets one step per frame — ALWAYS, so the very first
+        # load (no wipe) and late-arriving batches land too, never going stale.
+        if self._steps:
+            self._run_steps()
         else:
             self._wrap_ladder_lazily()
 
@@ -627,7 +675,9 @@ class StageWindow:
             self.screen.fill(BG_DARK)
 
         self._update_album_ambience()
-        if self._album_glow is not None:
+        # Album ambience only over the gradient background — on a photo
+        # background it would wash the picture out.
+        if self._album_glow is not None and not self._has_photo_bg:
             self.screen.blit(self._album_glow,
                              ((self.W - self._album_glow.get_width()) // 2,
                               (self.H - self._album_glow.get_height()) // 2),
@@ -644,12 +694,6 @@ class StageWindow:
             self.screen.blit(self._vignette, (0, 0), special_flags=self.pg.BLEND_ADD)
 
         cx, cy = self.W // 2, int(self.H * 0.46)
-        if self._ring is not None and self._pulse > 0.03:
-            self._ring.set_alpha(int(190 * self._pulse))
-            self.screen.blit(self._ring, (cx - self._ring.get_width() // 2,
-                                          cy - self._ring.get_height() // 2),
-                             special_flags=self.pg.BLEND_ADD)
-
         # Logo (pulse ladder) or hero-name fallback.
         if self._ladder:
             idx = int(self._pulse * (PULSE_STEPS - 1))
@@ -840,14 +884,16 @@ class StageWindow:
         if phase == "in":
             p = (now - a["t0"]) / T_IN
             if p >= 1.0:
-                self._anim = {"phase": "swap" if self._steps else "wait", "t0": now}
+                self._anim = {"phase": "hold", "t0": now}
                 x = -s
             else:
                 x = int(W - (W + s) * _smoothstep(p))
-        elif phase in ("swap", "wait"):
+        elif phase == "hold":
+            # Fully covered; wait until the NEW hero's asset batch has been
+            # fully applied (sequence caught up), then show the portrait.
             x = -s
-            if phase == "wait" and self._steps:
-                self._anim = {"phase": "swap", "t0": now}
+            if self._applied_seq == self._seq:
+                self._anim = {"phase": "show", "t0": now}
         elif phase == "show":
             p = (now - a["t0"]) / T_SHOW
             if p >= 1.0:

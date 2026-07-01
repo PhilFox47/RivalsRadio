@@ -45,9 +45,12 @@ class HeroConfig:
     logo: str = ""
     # Filename (relative to signatures/) of the hero signature shown top-right.
     signature: str = ""
-    # Filename (relative to portraits/) of the hero portrait. Not shown on the
-    # Stage (yet) — used as the source for automatic colour extraction.
+    # Filename (relative to portraits/) of the hero portrait: shown in the
+    # hero-switch animation and used for automatic colour extraction.
     portrait: str = ""
+    # Filename (relative to backgrounds/) of the full-scene Stage background
+    # picture (blurred per the Stage settings).
+    background: str = ""
     # Per-hero Stage colours as "#RRGGBB". main = background/glow, accent = bars.
     # Blank = auto-extract from the portrait/logo, falling back to the default.
     color_main: str = ""
@@ -58,7 +61,8 @@ class HeroConfig:
     def is_empty(self) -> bool:
         """True if the hero has no user-set data (a bare auto-added entry)."""
         return not any((self.playlist_uri, self.avatar, self.logo, self.signature,
-                        self.portrait, self.color_main, self.color_accent, self.accent))
+                        self.portrait, self.background,
+                        self.color_main, self.color_accent, self.accent))
 
     @classmethod
     def from_dict(cls, data: dict) -> "HeroConfig":
@@ -72,8 +76,9 @@ class Config:
     heroes: Dict[str, HeroConfig] = field(default_factory=dict)
 
     # Stage / presentation.
-    stage_style: str = "bars"       # visualizer style: bars
+    stage_style: str = "bars"       # visualizer layout: "bars" or "radial"
     stage_fps: int = 144            # Stage redraw target (frames per second)
+    stage_bg_blur: int = 12         # blur radius (px) for hero background images
     show_now_playing: bool = True   # show track + album art + progress on Stage
     web_overlay_enabled: bool = False  # serve the Stage as an OBS browser source
     web_overlay_port: int = 8770
@@ -117,6 +122,12 @@ class Config:
         os.makedirs(d, exist_ok=True)
         return d
 
+    @property
+    def backgrounds_dir(self) -> str:
+        d = os.path.join(app_data_dir(), "backgrounds")
+        os.makedirs(d, exist_ok=True)
+        return d
+
     def canonical_hero(self, name: str) -> str:
         """Resolve a detected hero name to the roster's canonical spelling."""
         if name in self.heroes:
@@ -151,6 +162,12 @@ class Config:
             return None
         return os.path.join(self.portraits_dir, h.portrait)
 
+    def background_path(self, hero: str) -> Optional[str]:
+        h = self.heroes.get(hero)
+        if not h or not h.background:
+            return None
+        return os.path.join(self.backgrounds_dir, h.background)
+
     # ----- persistence ---------------------------------------------------
     @classmethod
     def path(cls) -> str:
@@ -174,6 +191,7 @@ class Config:
                     for name, data in raw.get("heroes", {}).items()},
             stage_style=raw.get("stage_style", "bars"),
             stage_fps=int(raw.get("stage_fps", 144)),
+            stage_bg_blur=int(raw.get("stage_bg_blur", 12)),
             show_now_playing=raw.get("show_now_playing", True),
             web_overlay_enabled=raw.get("web_overlay_enabled", False),
             web_overlay_port=raw.get("web_overlay_port", 8770),
@@ -226,6 +244,7 @@ class Config:
             "heroes": {name: asdict(h) for name, h in self.heroes.items()},
             "stage_style": self.stage_style,
             "stage_fps": self.stage_fps,
+            "stage_bg_blur": self.stage_bg_blur,
             "show_now_playing": self.show_now_playing,
             "web_overlay_enabled": self.web_overlay_enabled,
             "web_overlay_port": self.web_overlay_port,

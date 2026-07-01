@@ -634,6 +634,22 @@ class App:
                           command=lambda v: self.fps_var.set(int(v)),
                           width=140, height=34, corner_radius=8, fg_color=CARD_HI,
                           button_color="#2c2f36", button_hover_color="#343841").pack(side="left")
+        brow = ctk.CTkFrame(pf, fg_color="transparent")
+        brow.pack(fill="x", padx=18, pady=6)
+        ctk.CTkLabel(brow, text="Background blur", font=self.f_body, text_color=MUTED,
+                     width=180, anchor="w").pack(side="left")
+        self.bg_blur_var = tk.IntVar(value=self.cfg.stage_bg_blur)
+        self._blur_value_lbl = ctk.CTkLabel(brow, text=f"{self.cfg.stage_bg_blur} px",
+                                            font=self.f_small, text_color=FAINT, width=44)
+        ctk.CTkSlider(brow, from_=0, to=30, number_of_steps=30,
+                      variable=self.bg_blur_var, width=220,
+                      progress_color=ACCENT, button_color=ACCENT,
+                      button_hover_color=ACCENT_HOVER,
+                      command=lambda v: self._blur_value_lbl.configure(
+                          text=f"{int(float(v))} px")).pack(side="left")
+        self._blur_value_lbl.pack(side="left", padx=8)
+        ctk.CTkLabel(pf, text="Applies to per-hero background pictures (Heroes → Art…).",
+                     font=self.f_small, text_color=FAINT).pack(anchor="w", padx=18, pady=(0, 4))
         self.nowplaying_var = tk.BooleanVar(value=self.cfg.show_now_playing)
         ctk.CTkSwitch(pf, text="Show now-playing (track + album art)",
                       variable=self.nowplaying_var, font=self.f_body,
@@ -887,7 +903,8 @@ class App:
             logo_path=self.cfg.logo_path(hero),
             signature_path=self.cfg.signature_path(hero),
             main_hex=main,
-            portrait_path=self.cfg.portrait_path(hero))
+            portrait_path=self.cfg.portrait_path(hero),
+            background_path=self.cfg.background_path(hero))
         playlist = self.cfg.heroes[hero].playlist_uri if hero in self.cfg.heroes else ""
         self.session_stats.note_hero(hero, playlist)
 
@@ -943,12 +960,14 @@ class App:
                 "Main colour. White-on-transparent PNG works best.",
         "signature": "Shown top-right on the Stage.",
         "portrait": "Used in the hero-switch animation and for automatic colours.",
+        "background": "Full-scene Stage background picture (blurred — set the "
+                      "blur in Settings → Stage & overlay).",
     }
 
     def _open_hero_art(self, hero: str) -> None:
         win = ctk.CTkToplevel(self.root)
         win.title(f"Hero art — {hero}")
-        win.geometry("470x350")
+        win.geometry("470x440")
         win.configure(fg_color=BG)
         win.transient(self.root)
         win.after(200, lambda: win.grab_set() if win.winfo_exists() else None)
@@ -999,6 +1018,7 @@ class App:
         row("logo")
         row("signature")
         row("portrait")
+        row("background")
         ctk.CTkButton(win, text="Done", height=34, font=self.f_bold, corner_radius=8,
                       command=lambda: self._close_art(win), **ACCENT_BTN).pack(pady=12)
         win.protocol("WM_DELETE_WINDOW", lambda: self._close_art(win))
@@ -1024,6 +1044,7 @@ class App:
             "logo": self.cfg.logos_dir,
             "signature": self.cfg.signatures_dir,
             "portrait": self.cfg.portraits_dir,
+            "background": self.cfg.backgrounds_dir,
         }[kind]
 
     def _choose_hero_image(self, hero: str, kind: str) -> bool:
@@ -1068,7 +1089,8 @@ class App:
         if not messagebox.askyesno("Remove", f"Remove {hero}?"):
             return
         for path in (self.cfg.logo_path(hero), self.cfg.signature_path(hero),
-                     self.cfg.portrait_path(hero), self.cfg.avatar_path(hero)):
+                     self.cfg.portrait_path(hero), self.cfg.background_path(hero),
+                     self.cfg.avatar_path(hero)):
             if path and os.path.exists(path):
                 try:
                     os.remove(path)
@@ -1117,6 +1139,7 @@ class App:
         self.cfg.spotify.device_name = self.device_var.get().strip()
         try:
             self.cfg.stage_fps = int(self.fps_var.get())
+            self.cfg.stage_bg_blur = int(self.bg_blur_var.get())
             self.cfg.web_overlay_port = int(self.web_port_var.get())
         except (tk.TclError, ValueError):
             messagebox.showwarning("Settings", "Numeric fields must be numbers.")
@@ -1130,6 +1153,7 @@ class App:
         self.cfg.save()
         if self.stage and self.stage.alive:
             self.stage.set_fps(self.cfg.stage_fps)
+            self.stage.refresh()   # re-render backgrounds with the new blur
         if not silent:
             self._append_log("Settings saved.")
 
