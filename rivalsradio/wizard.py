@@ -8,14 +8,14 @@ from tkinter import messagebox
 import customtkinter as ctk
 
 ACCENT = "#1DB954"
-ACCENT_HOVER = "#1ed760"
+ACCENT_HOVER = "#24d862"
 ACCENT_INK = "#06210f"
-NEUTRAL = "#34373e"
-NEUTRAL_HOVER = "#40444d"
-TEXT = "#e9ebed"
-MUTED = "#8b9096"
-CARD_HI = "#2b2d33"
-BG = "#1b1c20"
+NEUTRAL = "#22242a"
+NEUTRAL_HOVER = "#2c2f36"
+TEXT = "#eceded"
+MUTED = "#8f959c"
+CARD_HI = "#22242a"
+BG = "#0f1013"
 
 ACCENT_BTN = dict(fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=ACCENT_INK)
 NEUTRAL_BTN = dict(fg_color=NEUTRAL, hover_color=NEUTRAL_HOVER, text_color=TEXT)

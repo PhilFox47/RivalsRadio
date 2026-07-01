@@ -1,4 +1,17 @@
-"""Modern CustomTkinter desktop UI for RivalsRadio."""
+"""RivalsRadio desktop app — modern CustomTkinter UI.
+
+Design goals of this shell:
+
+- **Snappy.** UI work is event-driven, not polled: widgets are only
+  reconfigured when their state actually changes (a status signature guards
+  the pills/buttons), the Stats page only re-renders while it is visible, and
+  hero-row logo thumbnails are cached per (file, colour).
+- **Modern.** One consistent dark theme: soft cards on a deep background, a
+  single Spotify-green accent, pill status indicators, and generous spacing.
+- **Native-first.** Hero detection runs through the companion native Overwolf
+  app over localhost; the ow-electron bridge remains available under
+  Settings → Advanced.
+"""
 
 from __future__ import annotations
 
@@ -25,50 +38,56 @@ from .web_overlay import WebOverlay
 from .wizard import SetupWizard
 from .stats import SessionStats
 
-# ---- Palette -------------------------------------------------------------
+# ---- Palette ---------------------------------------------------------------
 ACCENT = "#1DB954"
-ACCENT_HOVER = "#1ed760"
+ACCENT_HOVER = "#24d862"
 ACCENT_INK = "#06210f"
 DANGER = "#e5484d"
-DANGER_HOVER = "#ec5d62"
+DANGER_HOVER = "#ef5a5f"
 DANGER_INK = "#2a0a08"
-NEUTRAL = "#34373e"
-NEUTRAL_HOVER = "#40444d"
-SIDEBAR = "#16171b"
-SIDEBAR_SEL = "#26282e"
-CONTENT_BG = "#1b1c20"
-CARD = "#232429"
-CARD_HI = "#2b2d33"
-TEXT = "#e9ebed"
-MUTED = "#8b9096"
-LOG_BG = "#17181b"
-LOG_FG = "#d7dadd"
 WARN = "#e3b341"
 
+BG = "#0f1013"          # window background
+SIDEBAR = "#0a0b0d"     # sidebar background
+SIDEBAR_SEL = "#1c1e23" # selected nav pill
+CARD = "#17181c"        # card surface
+CARD_HI = "#22242a"     # raised surface / inputs
+STROKE = "#26282e"      # hairline card border
+TEXT = "#eceded"
+MUTED = "#8f959c"
+FAINT = "#5c6167"
+LOG_BG = "#111216"
+LOG_FG = "#d7dadd"
+
 ACCENT_BTN = dict(fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=ACCENT_INK)
-NEUTRAL_BTN = dict(fg_color=NEUTRAL, hover_color=NEUTRAL_HOVER, text_color=TEXT)
+NEUTRAL_BTN = dict(fg_color=CARD_HI, hover_color="#2c2f36", text_color=TEXT)
 DANGER_BTN = dict(fg_color=DANGER, hover_color=DANGER_HOVER, text_color=DANGER_INK)
+
+NAV_ITEMS = (("Status", "▶"), ("Heroes", "♫"), ("Stats", "▦"), ("Settings", "⚙"))
 
 
 class App:
     def __init__(self, root: ctk.CTk) -> None:
         self.root = root
         self.root.title("RivalsRadio")
-        self.root.geometry("1000x720")
-        self.root.minsize(880, 620)
-        self.root.configure(fg_color=CONTENT_BG)
+        self.root.geometry("1080x740")
+        self.root.minsize(920, 640)
+        self.root.configure(fg_color=BG)
         self._set_window_icon()
 
-        # Fonts (must be created after the root exists).
+        # Fonts (created after the root exists).
         self.f_brand = ctk.CTkFont(size=22, weight="bold")
+        self.f_hero = ctk.CTkFont(size=34, weight="bold")
         self.f_h1 = ctk.CTkFont(size=24, weight="bold")
         self.f_section = ctk.CTkFont(size=15, weight="bold")
         self.f_body = ctk.CTkFont(size=13)
         self.f_bold = ctk.CTkFont(size=13, weight="bold")
         self.f_small = ctk.CTkFont(size=12)
         self.f_nav = ctk.CTkFont(size=14, weight="bold")
+        self.f_tile = ctk.CTkFont(size=26, weight="bold")
         self.f_mono = ("Consolas", 11)
 
+        # Core services.
         self.cfg = Config.load()
         self.spotify = SpotifyController(self.cfg.spotify)
         self._log_queue: "queue.Queue[str]" = queue.Queue()
@@ -87,24 +106,25 @@ class App:
         self.state.attach_visualizer(self.visualizer)
         self.stage: "StageWindow | None" = None
         self._accent_cache: dict = {}
+        self._thumb_cache: dict = {}      # (path, main_hex, px) -> CTkImage
 
         self.nowplaying = NowPlaying(self.spotify, self.state, on_log=self._enqueue_log)
         self.nowplaying.start()
         self.web_overlay = WebOverlay(self.state, self.cfg.web_overlay_port)
 
         # Shared UI variables.
-        self.status_var = tk.StringVar(value="Idle")
         self.hero_var = tk.StringVar(value="—")
-        self.spotify_var = tk.StringVar(value="Not connected")
-        self.game_var = tk.StringVar(value="Not detected")
         self.source_var = tk.StringVar(value=self.cfg.hero_source)
+        self._game_running = False
+        self._status_sig = None          # guards widget reconfiguration
+        self._current_page = "Status"
 
         self.nav_buttons: dict = {}
         self.pages: dict = {}
 
         self._build_ui()
         self._refresh_status()
-        self.root.after(150, self._drain_log_queue)
+        self.root.after(150, self._drain_queues)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         if self.cfg.web_overlay_enabled:
@@ -112,12 +132,21 @@ class App:
         if not self.cfg.setup_complete:
             self.root.after(300, lambda: SetupWizard(self.root, self))
         else:
-            # Auto-connect Spotify and auto-start monitoring on launch so the
-            # user doesn't have to click anything after opening the app.
+            # Hands-free start: connect Spotify + begin monitoring on launch.
             self.root.after(400, self._autostart)
 
+    # ------------------------------------------------------------- window
+    def _set_window_icon(self) -> None:
+        base = getattr(sys, "_MEIPASS",
+                       os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        ico = os.path.join(base, "assets", "icon.ico")
+        if os.path.exists(ico):
+            try:
+                self.root.iconbitmap(ico)
+            except Exception:
+                pass  # .ico is Windows-only
+
     def _autostart(self) -> None:
-        """Connect Spotify (if configured) and start monitoring automatically."""
         if (self.cfg.spotify.client_id and self.cfg.spotify.client_secret
                 and not self.spotify.connected):
             self._connect_spotify()
@@ -125,23 +154,13 @@ class App:
             self.monitor.start()
             self._refresh_status()
 
-    def _set_window_icon(self) -> None:
-        """Set the taskbar/title-bar icon from the bundled .ico (Windows)."""
-        base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        ico = os.path.join(base, "assets", "icon.ico")
-        if os.path.exists(ico):
-            try:
-                self.root.iconbitmap(ico)
-            except Exception:
-                pass  # .ico is Windows-only; ignore elsewhere
-
     # ------------------------------------------------------------------ UI
     def _build_ui(self) -> None:
         self.root.grid_columnconfigure(1, weight=1)
         self.root.grid_rowconfigure(0, weight=1)
         self._build_sidebar()
 
-        content = ctk.CTkFrame(self.root, fg_color=CONTENT_BG, corner_radius=0)
+        content = ctk.CTkFrame(self.root, fg_color=BG, corner_radius=0)
         content.grid(row=0, column=1, sticky="nsew")
         content.grid_rowconfigure(0, weight=1)
         content.grid_columnconfigure(0, weight=1)
@@ -152,7 +171,7 @@ class App:
             ("Stats", self._build_stats_page),
             ("Settings", self._build_settings_page),
         ):
-            page = ctk.CTkFrame(content, fg_color=CONTENT_BG, corner_radius=0)
+            page = ctk.CTkFrame(content, fg_color=BG, corner_radius=0)
             page.grid(row=0, column=0, sticky="nsew")
             builder(page)
             self.pages[name] = page
@@ -160,47 +179,53 @@ class App:
         self._select_page("Status")
 
     def _build_sidebar(self) -> None:
-        bar = ctk.CTkFrame(self.root, width=212, corner_radius=0, fg_color=SIDEBAR)
+        bar = ctk.CTkFrame(self.root, width=220, corner_radius=0, fg_color=SIDEBAR)
         bar.grid(row=0, column=0, sticky="nsew")
         bar.grid_propagate(False)
-        bar.grid_rowconfigure(6, weight=1)
+        bar.grid_rowconfigure(7, weight=1)
 
         brand = ctk.CTkFrame(bar, fg_color="transparent")
-        brand.grid(row=0, column=0, sticky="w", padx=22, pady=(26, 6))
+        brand.grid(row=0, column=0, sticky="w", padx=22, pady=(28, 2))
         ctk.CTkLabel(brand, text="Rivals", font=self.f_brand, text_color=TEXT).pack(side="left")
         ctk.CTkLabel(brand, text="Radio", font=self.f_brand, text_color=ACCENT).pack(side="left")
         ctk.CTkLabel(bar, text="hero-aware Spotify", font=self.f_small,
-                     text_color=MUTED).grid(row=1, column=0, sticky="w", padx=24, pady=(0, 22))
+                     text_color=FAINT).grid(row=1, column=0, sticky="w", padx=24, pady=(0, 24))
 
-        for i, name in enumerate(("Status", "Heroes", "Stats", "Settings")):
+        for i, (name, icon) in enumerate(NAV_ITEMS):
             btn = ctk.CTkButton(
-                bar, text=name, font=self.f_nav, anchor="w", height=42,
-                corner_radius=8, fg_color="transparent", text_color=MUTED,
+                bar, text=f"{icon}   {name}", font=self.f_nav, anchor="w", height=42,
+                corner_radius=10, fg_color="transparent", text_color=MUTED,
                 hover_color=SIDEBAR_SEL, command=lambda n=name: self._select_page(n),
             )
             btn.grid(row=2 + i, column=0, sticky="ew", padx=14, pady=3)
             self.nav_buttons[name] = btn
 
-        # Footer: live status dots.
+        # Footer: live status dots (updated only when state changes).
         footer = ctk.CTkFrame(bar, fg_color="transparent")
-        footer.grid(row=7, column=0, sticky="ew", padx=22, pady=18)
+        footer.grid(row=8, column=0, sticky="ew", padx=22, pady=20)
         self.dot_monitor = ctk.CTkLabel(footer, text="● Idle", font=self.f_small, text_color=MUTED)
         self.dot_monitor.pack(anchor="w")
+        self.dot_game = ctk.CTkLabel(footer, text="● Game offline", font=self.f_small, text_color=MUTED)
+        self.dot_game.pack(anchor="w", pady=(4, 0))
         self.dot_spotify = ctk.CTkLabel(footer, text="● Spotify offline", font=self.f_small, text_color=MUTED)
         self.dot_spotify.pack(anchor="w", pady=(4, 0))
 
     def _select_page(self, name: str) -> None:
+        self._current_page = name
         for n, btn in self.nav_buttons.items():
             if n == name:
                 btn.configure(fg_color=SIDEBAR_SEL, text_color=ACCENT)
             else:
                 btn.configure(fg_color="transparent", text_color=MUTED)
         self.pages[name].tkraise()
+        if name == "Stats":
+            self._refresh_stats(force=True)
 
-    # ----- helpers ----------------------------------------------------
+    # ----- shared builders ---------------------------------------------
     def _card(self, parent, title: str | None = None, **pack):
-        card = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=14)
-        defaults = dict(fill="x", padx=24, pady=10)
+        card = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=14,
+                            border_width=1, border_color=STROKE)
+        defaults = dict(fill="x", padx=24, pady=8)
         defaults.update(pack)
         card.pack(**defaults)
         if title:
@@ -210,125 +235,144 @@ class App:
 
     def _page_title(self, parent, text: str) -> None:
         ctk.CTkLabel(parent, text=text, font=self.f_h1, text_color=TEXT).pack(
-            anchor="w", padx=24, pady=(24, 4))
+            anchor="w", padx=26, pady=(24, 6))
 
     def _labeled_entry(self, parent, label, var, show=None, placeholder=""):
         row = ctk.CTkFrame(parent, fg_color="transparent")
         row.pack(fill="x", padx=18, pady=5)
         ctk.CTkLabel(row, text=label, font=self.f_body, text_color=MUTED,
-                     width=170, anchor="w").pack(side="left")
+                     width=180, anchor="w").pack(side="left")
         entry = ctk.CTkEntry(row, textvariable=var, show=show, height=34,
-                             placeholder_text=placeholder, fg_color=CARD_HI, border_width=0)
+                             placeholder_text=placeholder, fg_color=CARD_HI,
+                             border_width=0, corner_radius=8)
         entry.pack(side="left", fill="x", expand=True)
         return entry
 
-    # ----- Status page ------------------------------------------------
+    # ----- Status page --------------------------------------------------
     def _build_status_page(self, page) -> None:
         self._page_title(page, "Status")
 
-        info = self._card(page)
-        grid = ctk.CTkFrame(info, fg_color="transparent")
-        grid.pack(fill="x", padx=18, pady=16)
-        rows = [("Monitoring", self.status_var), ("Game", self.game_var),
-                ("Current hero", self.hero_var), ("Spotify", self.spotify_var)]
-        for r, (label, var) in enumerate(rows):
-            ctk.CTkLabel(grid, text=label, font=self.f_bold, text_color=MUTED,
-                         width=130, anchor="w").grid(row=r, column=0, sticky="w", pady=3)
-            ctk.CTkLabel(grid, textvariable=var, font=self.f_body, text_color=TEXT,
-                         anchor="w").grid(row=r, column=1, sticky="w", pady=3)
+        # Hero spotlight: the current hero, front and centre.
+        hero_card = self._card(page)
+        inner = ctk.CTkFrame(hero_card, fg_color="transparent")
+        inner.pack(fill="x", padx=20, pady=(16, 14))
+        ctk.CTkLabel(inner, text="CURRENT HERO", font=self.f_small,
+                     text_color=FAINT).pack(anchor="w")
+        ctk.CTkLabel(inner, textvariable=self.hero_var, font=self.f_hero,
+                     text_color=TEXT).pack(anchor="w", pady=(0, 6))
+        pills = ctk.CTkFrame(inner, fg_color="transparent")
+        pills.pack(anchor="w")
+        self.pill_monitor = self._pill(pills, "Idle")
+        self.pill_game = self._pill(pills, "Game offline")
+        self.pill_spotify = self._pill(pills, "Spotify offline")
 
-        # Detection source as a modern segmented control.
-        src = self._card(page, "Detection source")
+        # Detection source.
+        src = self._card(page, "Detection")
         seg = ctk.CTkSegmentedButton(
             src, values=["native", "gep"], variable=self.source_var,
             command=self._apply_source_change, font=self.f_bold,
             selected_color=ACCENT, selected_hover_color=ACCENT_HOVER,
-            unselected_color=CARD_HI, unselected_hover_color=NEUTRAL_HOVER,
-            text_color=TEXT, height=34,
+            unselected_color=CARD_HI, unselected_hover_color="#2c2f36",
+            text_color=TEXT, height=34, corner_radius=8,
         )
-        seg.pack(anchor="w", padx=18, pady=(4, 4))
-        ctk.CTkLabel(src, text="native = companion Overwolf app over localhost · "
-                     "gep = ow-electron bridge",
-                     font=self.f_small, text_color=MUTED).pack(anchor="w", padx=18, pady=(0, 14))
+        seg.pack(anchor="w", padx=18, pady=(6, 2))
+        ctk.CTkLabel(src, text="native = companion Overwolf app over localhost "
+                     "(recommended) · gep = ow-electron bridge",
+                     font=self.f_small, text_color=MUTED).pack(anchor="w", padx=18, pady=(0, 12))
 
-        # Manual hero switch — works today, no detection needed.
+        # Manual switch.
         man = self._card(page, "Manual hero switch")
         mrow = ctk.CTkFrame(man, fg_color="transparent")
-        mrow.pack(fill="x", padx=18, pady=(2, 4))
+        mrow.pack(fill="x", padx=18, pady=(4, 2))
         heroes = sorted(self.cfg.heroes) or ["—"]
         self.manual_hero_var = tk.StringVar(value=heroes[0])
         self.manual_menu = ctk.CTkOptionMenu(
-            mrow, values=heroes, variable=self.manual_hero_var, width=200, height=34,
-            fg_color=CARD_HI, button_color=NEUTRAL, button_hover_color=NEUTRAL_HOVER)
+            mrow, values=heroes, variable=self.manual_hero_var, width=220, height=34,
+            corner_radius=8, fg_color=CARD_HI, button_color="#2c2f36",
+            button_hover_color="#343841")
         self.manual_menu.pack(side="left")
         ctk.CTkButton(mrow, text="Switch playlist", height=34, font=self.f_bold,
+                      corner_radius=8,
                       command=lambda: self._manual_set_hero(self.manual_hero_var.get()),
                       **ACCENT_BTN).pack(side="left", padx=8)
-        ctk.CTkLabel(man, text="Pick your hero to switch the music now — handy on a second "
-                     "monitor while automatic detection is unavailable.",
-                     font=self.f_small, text_color=MUTED).pack(anchor="w", padx=18, pady=(0, 14))
+        ctk.CTkLabel(man, text="Instantly switch the music — works with or without detection.",
+                     font=self.f_small, text_color=MUTED).pack(anchor="w", padx=18, pady=(2, 12))
 
-        # Action buttons.
+        # Actions.
         actions = ctk.CTkFrame(page, fg_color="transparent")
-        actions.pack(fill="x", padx=24, pady=(2, 8))
-        self.start_btn = ctk.CTkButton(actions, text="Start monitoring", height=40, width=160,
-                                       font=self.f_bold, command=self._toggle_monitor, **ACCENT_BTN)
+        actions.pack(fill="x", padx=24, pady=(4, 6))
+        self.start_btn = ctk.CTkButton(actions, text="Start monitoring", height=40, width=170,
+                                       corner_radius=10, font=self.f_bold,
+                                       command=self._toggle_monitor, **ACCENT_BTN)
         self.start_btn.pack(side="left")
-        ctk.CTkButton(actions, text="Connect Spotify", height=40, font=self.f_bold,
-                      command=self._connect_spotify, **NEUTRAL_BTN).pack(side="left", padx=8)
-        ctk.CTkButton(actions, text="Open Stage view", height=40, font=self.f_bold,
-                      command=self._open_stage, **NEUTRAL_BTN).pack(side="left")
+        ctk.CTkButton(actions, text="Connect Spotify", height=40, corner_radius=10,
+                      font=self.f_bold, command=self._connect_spotify,
+                      **NEUTRAL_BTN).pack(side="left", padx=8)
+        ctk.CTkButton(actions, text="Open Stage", height=40, corner_radius=10,
+                      font=self.f_bold, command=self._open_stage,
+                      **NEUTRAL_BTN).pack(side="left")
 
         # Activity log.
-        log_card = self._card(page, "Activity log", fill="both", expand=True, pady=(10, 24))
+        log_card = self._card(page, "Activity", fill="both", expand=True, pady=(8, 24))
         wrap = ctk.CTkFrame(log_card, fg_color=LOG_BG, corner_radius=10)
-        wrap.pack(fill="both", expand=True, padx=18, pady=(2, 16))
+        wrap.pack(fill="both", expand=True, padx=18, pady=(4, 16))
         self.log_text = tk.Text(
             wrap, state="disabled", wrap="word", bg=LOG_BG, fg=LOG_FG, font=self.f_mono,
             relief="flat", bd=0, highlightthickness=0, padx=14, pady=12,
             insertbackground=LOG_FG, selectbackground=ACCENT, selectforeground=ACCENT_INK,
             spacing1=1, spacing3=3,
         )
-        self.log_text.pack(fill="both", expand=True, padx=6, pady=6)
+        self.log_text.pack(fill="both", expand=True, padx=4, pady=4)
         self.log_text.tag_config("accent", foreground=ACCENT)
         self.log_text.tag_config("muted", foreground=MUTED)
         self.log_text.tag_config("warn", foreground=WARN)
 
-    # ----- Heroes page ------------------------------------------------
+    def _pill(self, parent, text: str):
+        pill = ctk.CTkLabel(parent, text=f"●  {text}", font=self.f_small,
+                            text_color=MUTED, fg_color=CARD_HI, corner_radius=99,
+                            padx=10, height=26)
+        pill.pack(side="left", padx=(0, 8))
+        return pill
+
+    def _set_pill(self, pill, text: str, on: bool, on_color: str = ACCENT) -> None:
+        pill.configure(text=f"●  {text}", text_color=on_color if on else MUTED)
+
+    # ----- Heroes page ---------------------------------------------------
     def _build_heroes_page(self, page) -> None:
         self._page_title(page, "Heroes")
         ctk.CTkLabel(
-            page, justify="left", wraplength=760, font=self.f_small, text_color=MUTED,
-            text=("Heroes appear here automatically as they're detected in-game — "
-                  "start monitoring and play, and each hero you pick gets its own "
-                  "entry. For each hero: paste the Spotify playlist URI, set the art "
-                  "(logo + signature + portrait), and pick the two Stage colours — a "
-                  "main colour (tints the white logo) and an accent colour (bars + "
-                  "background glow). Leave them unset to auto-extract from the "
-                  "portrait/logo."),
-        ).pack(anchor="w", padx=24, pady=(0, 8))
+            page, justify="left", wraplength=780, font=self.f_small, text_color=MUTED,
+            text=("Heroes are added automatically as they're detected in-game. Per hero: "
+                  "a Spotify playlist, art (logo · signature · portrait), and two colours — "
+                  "Main tints the logo, Accent drives the bars and glow. Unset colours are "
+                  "auto-extracted from the portrait or logo."),
+        ).pack(anchor="w", padx=26, pady=(0, 10))
 
-        self.hero_rows = ctk.CTkScrollableFrame(page, fg_color=CARD, corner_radius=14)
+        self.hero_rows = ctk.CTkScrollableFrame(page, fg_color=CARD, corner_radius=14,
+                                                border_width=1, border_color=STROKE)
         self.hero_rows.pack(fill="both", expand=True, padx=24, pady=4)
 
         self.playlist_vars = {}
         self.color_main_vars = {}
         self.color_accent_vars = {}
-        self.color_swatches = {}  # hero -> (main_btn, accent_btn)
+        self.color_swatches = {}
         self.avatar_labels = {}
+        self._row_thumbs = []
         self._render_hero_rows()
 
         add = ctk.CTkFrame(page, fg_color="transparent")
-        add.pack(fill="x", padx=24, pady=(8, 24))
+        add.pack(fill="x", padx=24, pady=(10, 24))
         self.new_hero_var = tk.StringVar()
-        new_entry = ctk.CTkEntry(add, textvariable=self.new_hero_var, width=220, height=36,
-                                 placeholder_text="New hero name", fg_color=CARD_HI, border_width=0)
+        new_entry = ctk.CTkEntry(add, textvariable=self.new_hero_var, width=230, height=36,
+                                 placeholder_text="Add hero manually…", fg_color=CARD_HI,
+                                 border_width=0, corner_radius=8)
         new_entry.pack(side="left")
         new_entry.bind("<Return>", lambda _e: self._add_hero())
-        ctk.CTkButton(add, text="Add hero", height=36, font=self.f_bold,
-                      command=self._add_hero, **NEUTRAL_BTN).pack(side="left", padx=8)
+        ctk.CTkButton(add, text="Add", width=80, height=36, font=self.f_bold,
+                      corner_radius=8, command=self._add_hero, **NEUTRAL_BTN).pack(
+            side="left", padx=8)
         ctk.CTkButton(add, text="Save mappings", height=36, width=150, font=self.f_bold,
-                      command=self._save_heroes, **ACCENT_BTN).pack(side="right")
+                      corner_radius=8, command=self._save_heroes, **ACCENT_BTN).pack(side="right")
 
     def _render_hero_rows(self) -> None:
         for child in self.hero_rows.winfo_children():
@@ -338,39 +382,41 @@ class App:
         self.color_accent_vars.clear()
         self.color_swatches.clear()
         self.avatar_labels.clear()
-        self._row_thumbs = []  # keep CTkImage refs alive
+        self._row_thumbs = []
         self._rendered_hero_count = len(self.cfg.heroes)
 
         if not self.cfg.heroes:
             ctk.CTkLabel(
                 self.hero_rows, justify="left", font=self.f_body, text_color=MUTED,
-                text=("No heroes yet. Start monitoring and play a match — each hero "
-                      "you pick is added here automatically. You can also add one "
-                      "manually below."),
-            ).pack(anchor="w", padx=14, pady=18)
+                text=("No heroes yet. Start monitoring and play a match — every hero "
+                      "you pick appears here automatically. You can also add one below."),
+            ).pack(anchor="w", padx=16, pady=20)
 
         for hero in sorted(self.cfg.heroes):
             hc = self.cfg.heroes[hero]
             row = ctk.CTkFrame(self.hero_rows, fg_color=CARD_HI, corner_radius=10)
             row.pack(fill="x", padx=6, pady=4)
+
             thumb = self._hero_logo_thumb(hero, 26)
-            ctk.CTkLabel(row, image=thumb, text="", width=30).pack(
-                side="left", padx=(10, 0), pady=8)
+            ctk.CTkLabel(row, image=thumb, text="" if thumb else "♫", width=30,
+                         text_color=FAINT).pack(side="left", padx=(10, 0), pady=8)
             ctk.CTkLabel(row, text=hero, width=128, anchor="w", font=self.f_bold,
                          text_color=TEXT).pack(side="left", padx=(4, 6), pady=8)
+
             var = tk.StringVar(value=hc.playlist_uri)
             self.playlist_vars[hero] = var
             ctk.CTkEntry(row, textvariable=var, height=32, fg_color=CARD, border_width=0,
-                         placeholder_text="spotify:playlist:…").pack(
+                         corner_radius=8, placeholder_text="spotify:playlist:…").pack(
                 side="left", fill="x", expand=True, padx=4, pady=8)
+
             art_set = bool(hc.logo and hc.signature and hc.portrait)
-            art_btn = ctk.CTkButton(row, text="Art ✓" if art_set else "Art…", width=64, height=32,
-                                    font=self.f_small, command=lambda h=hero: self._open_hero_art(h),
+            art_btn = ctk.CTkButton(row, text="Art ✓" if art_set else "Art…", width=64,
+                                    height=32, corner_radius=8, font=self.f_small,
+                                    command=lambda h=hero: self._open_hero_art(h),
                                     **(ACCENT_BTN if art_set else NEUTRAL_BTN))
             art_btn.pack(side="left", padx=2)
-            self.avatar_labels[hero] = art_btn  # reused dict: hero -> art button
+            self.avatar_labels[hero] = art_btn
 
-            # Two per-hero colour swatches: main (glow) and accent (bars).
             self.color_main_vars[hero] = tk.StringVar(value=hc.color_main)
             self.color_accent_vars[hero] = tk.StringVar(value=hc.color_accent)
             main_btn = self._color_swatch(row, hero, "main")
@@ -380,10 +426,11 @@ class App:
             self.color_swatches[hero] = (main_btn, accent_btn)
 
             ctk.CTkButton(row, text="✕", width=32, height=32, font=self.f_bold,
-                          fg_color="transparent", hover_color=DANGER, text_color=MUTED,
-                          command=lambda h=hero: self._remove_hero(h)).pack(side="left", padx=(2, 10))
+                          corner_radius=8, fg_color="transparent", hover_color=DANGER,
+                          text_color=FAINT,
+                          command=lambda h=hero: self._remove_hero(h)).pack(
+                side="left", padx=(2, 10))
 
-        # Keep the Status-tab manual hero dropdown in sync with the roster.
         if hasattr(self, "manual_menu"):
             names = sorted(self.cfg.heroes) or ["—"]
             self.manual_menu.configure(values=names)
@@ -391,42 +438,47 @@ class App:
                 self.manual_hero_var.set(names[0])
 
     def _hero_logo_thumb(self, hero: str, px: int):
-        """Small, main-colour-tinted logo thumbnail for the Heroes list (or None)."""
+        """Cached, main-colour-tinted logo thumbnail for the Heroes list."""
         path = self.cfg.logo_path(hero)
         if not path or not os.path.exists(path):
             return None
+        main = self._effective_main(hero)
+        key = (path, main, px)
+        cached = self._thumb_cache.get(key)
+        if cached is not None:
+            self._row_thumbs.append(cached)
+            return cached
         try:
             from PIL import Image, ImageChops
             img = Image.open(path).convert("RGBA")
             r = px / max(img.width, img.height)
             img = img.resize((max(1, int(img.width * r)), max(1, int(img.height * r))),
                              Image.LANCZOS)
-            solid = Image.new("RGB", img.size, theming.hex_to_rgb(self._effective_main(hero)))
+            solid = Image.new("RGB", img.size, theming.hex_to_rgb(main))
             tint = ImageChops.multiply(img.convert("RGB"), solid).convert("RGBA")
             tint.putalpha(img.getchannel("A"))
             cimg = ctk.CTkImage(light_image=tint, dark_image=tint, size=img.size)
+            self._thumb_cache[key] = cimg
             self._row_thumbs.append(cimg)
             return cimg
         except Exception:
             return None
 
     def _color_swatch(self, parent, hero: str, kind: str):
-        """A small colour button (main/accent) that opens a colour picker."""
         var = (self.color_main_vars if kind == "main" else self.color_accent_vars)[hero]
         value = var.get().strip()
         label = "Main" if kind == "main" else "Accent"
-        btn = ctk.CTkButton(
-            parent, text=label, width=66, height=32, font=self.f_small,
+        valid = theming.is_valid_hex(value)
+        return ctk.CTkButton(
+            parent, text=label, width=66, height=32, font=self.f_small, corner_radius=8,
             text_color=self._swatch_ink(value),
-            fg_color=value if theming.is_valid_hex(value) else CARD,
-            hover_color=value if theming.is_valid_hex(value) else NEUTRAL_HOVER,
-            border_width=1, border_color=NEUTRAL,
+            fg_color=value if valid else CARD,
+            hover_color=value if valid else "#2c2f36",
+            border_width=1, border_color=STROKE,
             command=lambda h=hero, k=kind: self._pick_color(h, k))
-        return btn
 
     @staticmethod
     def _swatch_ink(hex_value: str) -> str:
-        """Pick black/white text for legibility on a coloured swatch."""
         if not theming.is_valid_hex(hex_value):
             return TEXT
         h = hex_value.lstrip("#")
@@ -436,7 +488,7 @@ class App:
     def _pick_color(self, hero: str, kind: str) -> None:
         var = (self.color_main_vars if kind == "main" else self.color_accent_vars)[hero]
         current = var.get().strip() or None
-        rgb, hex_value = colorchooser.askcolor(
+        _rgb, hex_value = colorchooser.askcolor(
             color=current if theming.is_valid_hex(current or "") else None,
             title=f"{kind.capitalize()} colour — {hero}", parent=self.root)
         if not hex_value:
@@ -447,7 +499,6 @@ class App:
         if btn:
             btn.configure(fg_color=hex_value, hover_color=hex_value,
                           text_color=self._swatch_ink(hex_value))
-        # Persist immediately and refresh the Stage if this hero is showing.
         field = "color_main" if kind == "main" else "color_accent"
         if hero in self.cfg.heroes:
             setattr(self.cfg.heroes[hero], field, hex_value)
@@ -456,12 +507,13 @@ class App:
         if self.hero_var.get() == hero:
             self._update_stage(hero)
 
-    # ----- Stats page -------------------------------------------------
+    # ----- Stats page ----------------------------------------------------
     def _stat_tile(self, parent, caption: str):
-        tile = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=14)
+        tile = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=14,
+                            border_width=1, border_color=STROKE)
         tile.pack(side="left", expand=True, fill="x", padx=6)
         var = tk.StringVar(value="—")
-        ctk.CTkLabel(tile, textvariable=var, font=self.f_h1, text_color=TEXT).pack(
+        ctk.CTkLabel(tile, textvariable=var, font=self.f_tile, text_color=TEXT).pack(
             anchor="w", padx=16, pady=(14, 0))
         ctk.CTkLabel(tile, text=caption, font=self.f_small, text_color=MUTED).pack(
             anchor="w", padx=16, pady=(0, 14))
@@ -469,13 +521,13 @@ class App:
 
     def _build_stats_page(self, page) -> None:
         header = ctk.CTkFrame(page, fg_color="transparent")
-        header.pack(fill="x", padx=24, pady=(24, 4))
+        header.pack(fill="x", padx=26, pady=(24, 6))
         ctk.CTkLabel(header, text="Stats", font=self.f_h1, text_color=TEXT).pack(side="left")
-        ctk.CTkButton(header, text="Reset session", height=34, font=self.f_small,
-                      command=self._reset_stats, **NEUTRAL_BTN).pack(side="right")
-        ctk.CTkLabel(page, text="This session — playtime is tracked live; match results "
-                     "and KDA come from the Overwolf GEP bridge when available.",
-                     font=self.f_small, text_color=MUTED).pack(anchor="w", padx=24, pady=(0, 8))
+        ctk.CTkButton(header, text="Reset session", height=32, font=self.f_small,
+                      corner_radius=8, command=self._reset_stats, **NEUTRAL_BTN).pack(side="right")
+        ctk.CTkLabel(page, text="This session — playtime is tracked live; match results and "
+                     "KDA arrive from Overwolf game events.",
+                     font=self.f_small, text_color=MUTED).pack(anchor="w", padx=26, pady=(0, 8))
 
         tiles = ctk.CTkFrame(page, fg_color="transparent")
         tiles.pack(fill="x", padx=18, pady=4)
@@ -486,22 +538,28 @@ class App:
 
         card = self._card(page, "Hero breakdown", fill="both", expand=True, pady=(10, 24))
         wrap = ctk.CTkFrame(card, fg_color=LOG_BG, corner_radius=10)
-        wrap.pack(fill="both", expand=True, padx=18, pady=(2, 16))
+        wrap.pack(fill="both", expand=True, padx=18, pady=(4, 16))
         self.stats_text = tk.Text(
             wrap, state="disabled", wrap="none", bg=LOG_BG, fg=LOG_FG, font=self.f_mono,
             relief="flat", bd=0, highlightthickness=0, padx=14, pady=12)
-        self.stats_text.pack(fill="both", expand=True, padx=6, pady=6)
+        self.stats_text.pack(fill="both", expand=True, padx=4, pady=4)
         self.stats_text.tag_config("head", foreground=MUTED)
         self.stats_text.tag_config("accent", foreground=ACCENT)
-        self._refresh_stats()
+        self._stats_sig = None
+        self._refresh_stats(force=True)
 
-    def _fmt_dur(self, seconds: float) -> str:
+    @staticmethod
+    def _fmt_dur(seconds: float) -> str:
         m, s = divmod(int(seconds), 60)
         h, m = divmod(m, 60)
         return f"{h}h {m:02d}m" if h else f"{m}m {s:02d}s"
 
-    def _refresh_stats(self) -> None:
+    def _refresh_stats(self, force: bool = False) -> None:
+        """Re-render the Stats page. Skipped entirely while the page is hidden,
+        and the (heavy) breakdown text is only rebuilt when its data changed."""
         if not hasattr(self, "stat_kda"):
+            return
+        if not force and self._current_page != "Stats":
             return
         s = self.session_stats.snapshot()
         self.stat_playtime.set(self._fmt_dur(s["duration"]))
@@ -509,33 +567,38 @@ class App:
         self.stat_winrate.set("—" if s["winrate"] is None else f"{s['winrate']:.0f}%")
         self.stat_kda.set(f"{s['kda']:.2f}  ({s['kills']}/{s['deaths']}/{s['assists']})")
 
+        sig = (s["current"], tuple((h["hero"], h["plays"], int(h["seconds"] // 10))
+                                   for h in s["heroes"]))
+        if not force and sig == self._stats_sig:
+            return
+        self._stats_sig = sig
         self.stats_text.config(state="normal")
         self.stats_text.delete("1.0", "end")
         self.stats_text.insert("end", f"{'Hero':<20}{'Playtime':>12}{'Plays':>8}\n", ("head",))
         for h in s["heroes"]:
             mark = "▸ " if h["hero"] == s["current"] else "  "
             line = f"{mark}{h['hero']:<18}{self._fmt_dur(h['seconds']):>12}{h['plays']:>8}\n"
-            self.stats_text.insert("end", line, ("accent",) if h["hero"] == s["current"] else ())
+            self.stats_text.insert("end", line,
+                                   ("accent",) if h["hero"] == s["current"] else ())
         if not s["heroes"]:
             self.stats_text.insert("end", "\n  No heroes played yet this session.", ("head",))
         self.stats_text.config(state="disabled")
 
     def _reset_stats(self) -> None:
         self.session_stats.reset()
-        self._refresh_stats()
+        self._refresh_stats(force=True)
         self._append_log("Session stats reset.")
 
-    # ----- Settings page ----------------------------------------------
+    # ----- Settings page --------------------------------------------------
     def _build_settings_page(self, page) -> None:
         page.grid_rowconfigure(0, weight=1)
         page.grid_columnconfigure(0, weight=1)
-        scroll = ctk.CTkScrollableFrame(page, fg_color=CONTENT_BG, corner_radius=0)
+        scroll = ctk.CTkScrollableFrame(page, fg_color=BG, corner_radius=0)
         scroll.grid(row=0, column=0, sticky="nsew")
 
         self._page_title(scroll, "Settings")
 
-        # Spotify.
-        sf = self._card(scroll, "Spotify (Premium required)")
+        sf = self._card(scroll, "Spotify  (Premium required)")
         self.client_id_var = tk.StringVar(value=self.cfg.spotify.client_id)
         self.client_secret_var = tk.StringVar(value=self.cfg.spotify.client_secret)
         self.redirect_var = tk.StringVar(value=self.cfg.spotify.redirect_uri)
@@ -544,62 +607,59 @@ class App:
         self._labeled_entry(sf, "Client Secret", self.client_secret_var, show="•")
         self._labeled_entry(sf, "Redirect URI", self.redirect_var)
         self._labeled_entry(sf, "Device name (optional)", self.device_var,
-                            placeholder="leave blank for active device")
+                            placeholder="leave blank for the active device")
         ctk.CTkFrame(sf, fg_color="transparent", height=8).pack()
-
-        # Detection source.
-        df = self._card(scroll, "Hero detection source")
-        ctk.CTkSegmentedButton(
-            df, values=["native", "gep"], variable=self.source_var,
-            command=self._apply_source_change, font=self.f_bold,
-            selected_color=ACCENT, selected_hover_color=ACCENT_HOVER,
-            unselected_color=CARD_HI, unselected_hover_color=NEUTRAL_HOVER,
-            text_color=TEXT, height=34,
-        ).pack(anchor="w", padx=18, pady=4)
-        self.bridge_cmd_var = tk.StringVar(value=self.cfg.gep_bridge_cmd)
-        self._labeled_entry(df, "GEP bridge command", self.bridge_cmd_var,
-                            placeholder="blank = use the bundled bridge")
-        self.pkg_url_var = tk.StringVar(value=self.cfg.gep_packages_url)
-        self._labeled_entry(df, "GEP packages URL (advanced)", self.pkg_url_var,
-                            placeholder="blank = Overwolf PROD; QA URL for DEV games")
-        self.gep_debug_var = tk.BooleanVar(value=self.cfg.gep_debug)
-        ctk.CTkSwitch(df, text="Log raw GEP events for diagnostics",
-                      variable=self.gep_debug_var, command=self._toggle_gep_debug,
-                      font=self.f_body, progress_color=ACCENT).pack(anchor="w", padx=18, pady=(8, 2))
-        ctk.CTkLabel(df, text=f"Writes to {os.path.join(app_data_dir(), 'gep-debug.log')}",
-                     font=self.f_small, text_color=MUTED).pack(anchor="w", padx=18, pady=(0, 14))
 
         # Stage & overlay.
         pf = self._card(scroll, "Stage & overlay")
         frow = ctk.CTkFrame(pf, fg_color="transparent")
         frow.pack(fill="x", padx=18, pady=6)
         ctk.CTkLabel(frow, text="Visualizer FPS", font=self.f_body, text_color=MUTED,
-                     width=170, anchor="w").pack(side="left")
+                     width=180, anchor="w").pack(side="left")
         self.fps_var = tk.IntVar(value=self.cfg.stage_fps)
         ctk.CTkOptionMenu(frow, values=["60", "90", "120", "144", "160"],
                           variable=tk.StringVar(value=str(self.cfg.stage_fps)),
                           command=lambda v: self.fps_var.set(int(v)),
-                          width=140, height=34, fg_color=CARD_HI, button_color=NEUTRAL,
-                          button_hover_color=NEUTRAL_HOVER).pack(side="left")
+                          width=140, height=34, corner_radius=8, fg_color=CARD_HI,
+                          button_color="#2c2f36", button_hover_color="#343841").pack(side="left")
         self.nowplaying_var = tk.BooleanVar(value=self.cfg.show_now_playing)
-        ctk.CTkSwitch(pf, text="Show now-playing (track + album art)", variable=self.nowplaying_var,
-                      font=self.f_body, progress_color=ACCENT).pack(anchor="w", padx=18, pady=8)
+        ctk.CTkSwitch(pf, text="Show now-playing (track + album art)",
+                      variable=self.nowplaying_var, font=self.f_body,
+                      progress_color=ACCENT).pack(anchor="w", padx=18, pady=8)
         prow = ctk.CTkFrame(pf, fg_color="transparent")
         prow.pack(fill="x", padx=18, pady=6)
         ctk.CTkLabel(prow, text="OBS overlay port", font=self.f_body, text_color=MUTED,
-                     width=170, anchor="w").pack(side="left")
+                     width=180, anchor="w").pack(side="left")
         self.web_port_var = tk.IntVar(value=self.cfg.web_overlay_port)
         ctk.CTkEntry(prow, textvariable=self.web_port_var, width=100, height=34,
-                     fg_color=CARD_HI, border_width=0).pack(side="left")
+                     fg_color=CARD_HI, border_width=0, corner_radius=8).pack(side="left")
         self.web_btn = ctk.CTkButton(
             pf, text="Stop OBS overlay" if self.web_overlay.running else "Start OBS overlay",
-            height=34, font=self.f_small, command=self._toggle_web_overlay, **NEUTRAL_BTN)
+            height=34, font=self.f_small, corner_radius=8,
+            command=self._toggle_web_overlay, **NEUTRAL_BTN)
         self.web_btn.pack(anchor="w", padx=18, pady=(8, 14))
 
-        ctk.CTkButton(scroll, text="Save settings", height=40, width=170, font=self.f_bold,
-                      command=self._save_settings, **ACCENT_BTN).pack(pady=18)
+        # Advanced: ow-electron bridge (kept out of the way; native is default).
+        df = self._card(scroll, "Advanced — ow-electron GEP bridge")
+        ctk.CTkLabel(df, text="Only needed when the detection source is set to 'gep'.",
+                     font=self.f_small, text_color=MUTED).pack(anchor="w", padx=18, pady=(2, 4))
+        self.bridge_cmd_var = tk.StringVar(value=self.cfg.gep_bridge_cmd)
+        self._labeled_entry(df, "Bridge command", self.bridge_cmd_var,
+                            placeholder="blank = bundled bridge")
+        self.pkg_url_var = tk.StringVar(value=self.cfg.gep_packages_url)
+        self._labeled_entry(df, "Packages URL", self.pkg_url_var,
+                            placeholder="blank = Overwolf PROD")
+        self.gep_debug_var = tk.BooleanVar(value=self.cfg.gep_debug)
+        ctk.CTkSwitch(df, text="Log raw GEP events for diagnostics",
+                      variable=self.gep_debug_var, command=self._toggle_gep_debug,
+                      font=self.f_body, progress_color=ACCENT).pack(anchor="w", padx=18, pady=(6, 2))
+        ctk.CTkLabel(df, text=f"Writes to {os.path.join(app_data_dir(), 'gep-debug.log')}",
+                     font=self.f_small, text_color=FAINT).pack(anchor="w", padx=18, pady=(0, 12))
 
-    # --------------------------------------------------------------- actions
+        ctk.CTkButton(scroll, text="Save settings", height=40, width=170, font=self.f_bold,
+                      corner_radius=10, command=self._save_settings, **ACCENT_BTN).pack(pady=18)
+
+    # ---------------------------------------------------------- queues/log
     def _enqueue_log(self, message: str) -> None:
         self._log_queue.put(message)
 
@@ -610,7 +670,7 @@ class App:
         self._enqueue_log(f"▶ Now playing as: {hero}")
         self._hero_queue.put(hero)
 
-    def _drain_log_queue(self) -> None:
+    def _drain_queues(self) -> None:
         try:
             while True:
                 msg = self._log_queue.get_nowait()
@@ -621,8 +681,7 @@ class App:
             pass
         try:
             while True:
-                hero = self._hero_queue.get_nowait()
-                self._update_stage(hero)
+                self._update_stage(self._hero_queue.get_nowait())
         except queue.Empty:
             pass
         try:
@@ -631,31 +690,13 @@ class App:
         except queue.Empty:
             pass
         self._refresh_stats()
-        # If the monitor auto-added a newly-detected hero, surface it in the
-        # Heroes list without discarding any playlist text typed but not saved.
+        # Surface heroes the monitor auto-added, keeping unsaved edits intact.
         if hasattr(self, "_rendered_hero_count") and \
                 len(self.cfg.heroes) != self._rendered_hero_count:
             self._persist_hero_edits()
             self._render_hero_rows()
         self._refresh_status()
-        self.root.after(250, self._drain_log_queue)
-
-    def _persist_hero_edits(self) -> None:
-        """Save current hero-row edits without validation dialogs (for refreshes)."""
-        for hero, var in self.playlist_vars.items():
-            if hero in self.cfg.heroes:
-                self.cfg.heroes[hero].playlist_uri = var.get().strip()
-        for hero, var in self.color_main_vars.items():
-            if hero in self.cfg.heroes:
-                value = var.get().strip()
-                if not value or theming.is_valid_hex(value):
-                    self.cfg.heroes[hero].color_main = value
-        for hero, var in self.color_accent_vars.items():
-            if hero in self.cfg.heroes:
-                value = var.get().strip()
-                if not value or theming.is_valid_hex(value):
-                    self.cfg.heroes[hero].color_accent = value
-        self.cfg.save()
+        self.root.after(250, self._drain_queues)
 
     def _append_log(self, message: str) -> None:
         ts = time.strftime("%H:%M:%S")
@@ -672,25 +713,37 @@ class App:
         self.log_text.see("end")
         self.log_text.config(state="disabled")
 
+    # ---------------------------------------------------------- status
     def _refresh_status(self) -> None:
+        """Update pills/buttons/dots — but only touch widgets when the combined
+        state actually changed (CTk reconfigures are surprisingly costly)."""
         running = self.monitor.running
-        self.status_var.set("Running" if running else "Idle")
-        if not running:
-            self.game_var.set("Not detected")
+        connected = self.spotify.connected
+        sig = (running, connected, self._game_running)
+        if sig == self._status_sig:
+            return
+        self._status_sig = sig
+
         self.start_btn.configure(
             text="Stop monitoring" if running else "Start monitoring",
-            **(DANGER_BTN if running else ACCENT_BTN),
-        )
-        connected = self.spotify.connected
-        self.spotify_var.set("Connected" if connected else "Not connected")
-        if hasattr(self, "dot_monitor"):
-            self.dot_monitor.configure(
-                text="● Running" if running else "● Idle",
-                text_color=ACCENT if running else MUTED)
-            self.dot_spotify.configure(
-                text="● Spotify connected" if connected else "● Spotify offline",
-                text_color=ACCENT if connected else MUTED)
+            **(DANGER_BTN if running else ACCENT_BTN))
+        self._set_pill(self.pill_monitor, "Monitoring" if running else "Idle", running)
+        self._set_pill(self.pill_game,
+                       "Game running" if self._game_running else "Game offline",
+                       self._game_running)
+        self._set_pill(self.pill_spotify,
+                       "Spotify connected" if connected else "Spotify offline", connected)
+        self.dot_monitor.configure(
+            text="● Monitoring" if running else "● Idle",
+            text_color=ACCENT if running else MUTED)
+        self.dot_game.configure(
+            text="● Game running" if self._game_running else "● Game offline",
+            text_color=ACCENT if self._game_running else MUTED)
+        self.dot_spotify.configure(
+            text="● Spotify connected" if connected else "● Spotify offline",
+            text_color=ACCENT if connected else MUTED)
 
+    # ---------------------------------------------------------- actions
     def _toggle_monitor(self) -> None:
         if self.monitor.running:
             self.monitor.stop()
@@ -700,11 +753,10 @@ class App:
         self._refresh_status()
 
     def _manual_set_hero(self, hero: str) -> None:
-        """Manually set the current hero and switch its playlist (no detection)."""
         if not hero or hero == "—":
             return
         self.hero_var.set(hero)
-        self._update_stage(hero)  # Stage + session-stats playtime
+        self._update_stage(hero)
         hc = self.cfg.heroes.get(hero)
         playlist = hc.playlist_uri if hc else ""
         if not playlist:
@@ -720,7 +772,6 @@ class App:
             self._append_log(f"Set {hero}, but playback failed: {exc}")
 
     def _apply_source_change(self, _value=None) -> None:
-        """Persist the detection source immediately and apply it live."""
         src = self.source_var.get()
         if src == self.cfg.hero_source and not self.monitor.running:
             return
@@ -736,7 +787,7 @@ class App:
         self.cfg.gep_debug = bool(self.gep_debug_var.get())
         self.cfg.save()
         self._append_log(f"GEP debug logging {'on' if self.cfg.gep_debug else 'off'}.")
-        if self.monitor.running:  # re-launch the bridge so the change applies now
+        if self.monitor.running:
             self.monitor.stop()
             self.monitor.start()
             self._refresh_status()
@@ -744,12 +795,10 @@ class App:
     def _connect_spotify(self) -> None:
         self._save_settings(silent=True)
         self._append_log(
-            "Connecting to Spotify — a browser will open. Approve access there. "
+            "Connecting to Spotify — approve access in the browser if prompted. "
             f"(Redirect URI: {self.cfg.spotify.redirect_uri})")
 
         def worker() -> None:
-            # Runs off the UI thread: spotipy blocks waiting for the browser
-            # redirect, so doing this inline would freeze the window.
             try:
                 self.spotify.connect()
                 self._enqueue_log("Spotify connected.")
@@ -758,15 +807,13 @@ class App:
 
         threading.Thread(target=worker, name="spotify-connect", daemon=True).start()
 
-    # ----- Stage (second screen) -------------------------------------
+    # ---------------------------------------------------------- stage
     def _effective_accent(self, hero: str) -> str:
         hc = self.cfg.heroes.get(hero)
         if hc and hc.color_accent and theming.is_valid_hex(hc.color_accent):
             return hc.color_accent
         if hero in self._accent_cache:
             return self._accent_cache[hero]
-        # Prefer the portrait for colour extraction (richest art), then the
-        # logo, then the legacy avatar.
         path = (self.cfg.portrait_path(hero) or self.cfg.logo_path(hero)
                 or self.cfg.avatar_path(hero))
         accent = theming.extract_accent(path) if path else theming.DEFAULT_ACCENT
@@ -774,9 +821,6 @@ class App:
         return accent
 
     def _effective_main(self, hero: str) -> str:
-        """Main colour: tints the (white) hero logo on the Stage. Explicit
-        override, else the auto-extracted accent so an untinted white logo still
-        comes out as a bright, legible colour."""
         hc = self.cfg.heroes.get(hero)
         if hc and hc.color_main and theming.is_valid_hex(hc.color_main):
             return hc.color_main
@@ -789,32 +833,10 @@ class App:
             return
         self.stage = StageWindow(self.root, self.state, self.cfg, self.visualizer)
         if not self.visualizer.available:
-            self._append_log(
-                "Stage opened. Audio visualizer backend unavailable "
-                "(install 'soundcard' on Windows for live audio bars).")
+            self._append_log("Stage opened — audio backend unavailable, bars will idle "
+                             "(install 'soundcard' on Windows for live audio).")
         else:
-            self._append_log("Stage opened. Drag it to your second screen, F11 = fullscreen.")
-
-    def _handle_game_event(self, event: dict) -> None:
-        """Feed best-effort GEP match/KDA events into the session stats."""
-        etype = event.get("type")
-        if etype == "match" and event.get("result"):
-            self.session_stats.note_match_result(event["result"])
-            self._append_log(f"Match {event['result']} recorded.")
-        elif etype == "stats":
-            self.session_stats.note_kda(
-                event.get("kills", 0), event.get("deaths", 0), event.get("assists", 0))
-        elif etype == "game":
-            running = bool(event.get("running"))
-            self.game_var.set("Running ✓" if running else "Not running")
-            self._append_log("Marvel Rivals " + ("detected and running." if running else "exited."))
-        elif etype == "needs_admin" and not getattr(self, "_warned_admin", False):
-            self._warned_admin = True
-            messagebox.showwarning(
-                "Run as administrator",
-                "Marvel Rivals runs with anti-cheat (administrator), so RivalsRadio "
-                "must also run as administrator to read game events.\n\n"
-                "Close RivalsRadio, right-click it, and choose 'Run as administrator'.")
+            self._append_log("Stage opened. Drag to your second screen; F11 = fullscreen.")
 
     def _update_stage(self, hero: str) -> None:
         accent = self._effective_accent(hero)
@@ -827,6 +849,27 @@ class App:
             portrait_path=self.cfg.portrait_path(hero))
         playlist = self.cfg.heroes[hero].playlist_uri if hero in self.cfg.heroes else ""
         self.session_stats.note_hero(hero, playlist)
+
+    def _handle_game_event(self, event: dict) -> None:
+        etype = event.get("type")
+        if etype == "match" and event.get("result"):
+            self.session_stats.note_match_result(event["result"])
+            self._append_log(f"Match {event['result']} recorded.")
+        elif etype == "stats":
+            self.session_stats.note_kda(
+                event.get("kills", 0), event.get("deaths", 0), event.get("assists", 0))
+        elif etype == "game":
+            self._game_running = bool(event.get("running"))
+            self._status_sig = None      # force a pill refresh
+            self._append_log("Marvel Rivals " +
+                             ("detected and running." if self._game_running else "exited."))
+        elif etype == "needs_admin" and not getattr(self, "_warned_admin", False):
+            self._warned_admin = True
+            messagebox.showwarning(
+                "Run as administrator",
+                "Marvel Rivals runs elevated (anti-cheat), so RivalsRadio must also "
+                "run as administrator to read game events.\n\n"
+                "Close RivalsRadio, right-click it, and choose 'Run as administrator'.")
 
     def _toggle_web_overlay(self, initial: bool = False) -> None:
         if self.web_overlay.running and not initial:
@@ -849,31 +892,32 @@ class App:
             self.web_btn.configure(
                 text="Stop OBS overlay" if self.web_overlay.running else "Start OBS overlay")
 
+    # ---------------------------------------------------------- hero art
     _ART_HELP = {
-        "logo": "Centred on the Stage; pulses with audio and is tinted the main colour. White-on-transparent PNG works best.",
+        "logo": "Centred on the Stage; pulses to the beat and is tinted the "
+                "Main colour. White-on-transparent PNG works best.",
         "signature": "Shown top-right on the Stage.",
-        "portrait": "Not shown on the Stage (yet); used for automatic colours.",
+        "portrait": "Used in the hero-switch animation and for automatic colours.",
     }
 
     def _open_hero_art(self, hero: str) -> None:
-        """Per-hero art: centred logo, top-right signature, and a portrait used
-        as the source for automatic colour extraction."""
         win = ctk.CTkToplevel(self.root)
         win.title(f"Hero art — {hero}")
-        win.geometry("460x340")
-        win.configure(fg_color=CONTENT_BG)
+        win.geometry("470x350")
+        win.configure(fg_color=BG)
         win.transient(self.root)
         win.after(200, lambda: win.grab_set() if win.winfo_exists() else None)
 
         ctk.CTkLabel(win, text=f"Hero art for {hero}", font=self.f_section,
                      text_color=TEXT).pack(anchor="w", padx=18, pady=(16, 2))
-        ctk.CTkLabel(win, text="PNG with transparent background works best.",
+        ctk.CTkLabel(win, text="PNG with a transparent background works best.",
                      font=self.f_small, text_color=MUTED).pack(anchor="w", padx=18, pady=(0, 10))
 
         def row(kind: str):
             hc = self.cfg.heroes.get(hero)
             cur = getattr(hc, kind, "") if hc else ""
-            fr = ctk.CTkFrame(win, fg_color=CARD, corner_radius=10)
+            fr = ctk.CTkFrame(win, fg_color=CARD, corner_radius=10,
+                              border_width=1, border_color=STROKE)
             fr.pack(fill="x", padx=18, pady=6)
             head = ctk.CTkFrame(fr, fg_color="transparent")
             head.pack(side="left", padx=12, pady=8)
@@ -901,19 +945,20 @@ class App:
                     self._update_stage(hero)
 
             ctk.CTkButton(fr, text="Choose…", width=80, height=30, font=self.f_small,
-                          command=choose, **NEUTRAL_BTN).pack(side="right", padx=(4, 12))
+                          corner_radius=8, command=choose, **NEUTRAL_BTN).pack(
+                side="right", padx=(4, 12))
             ctk.CTkButton(fr, text="Clear", width=60, height=30, font=self.f_small,
-                          command=clear, **NEUTRAL_BTN).pack(side="right", padx=4)
+                          corner_radius=8, command=clear, **NEUTRAL_BTN).pack(
+                side="right", padx=4)
 
         row("logo")
         row("signature")
         row("portrait")
-        ctk.CTkButton(win, text="Done", height=34, font=self.f_bold,
+        ctk.CTkButton(win, text="Done", height=34, font=self.f_bold, corner_radius=8,
                       command=lambda: self._close_art(win), **ACCENT_BTN).pack(pady=12)
         win.protocol("WM_DELETE_WINDOW", lambda: self._close_art(win))
 
     def _close_art(self, win) -> None:
-        """Close the art dialog and refresh the Heroes list (logo thumbnails)."""
         try:
             win.destroy()
         except Exception:
@@ -937,7 +982,6 @@ class App:
         }[kind]
 
     def _choose_hero_image(self, hero: str, kind: str) -> bool:
-        """Copy a chosen image into the logos/signatures/portraits dir."""
         path = filedialog.askopenfilename(
             title=f"Choose {kind} for {hero}",
             filetypes=[("Images", "*.png *.webp *.jpg *.jpeg"), ("All files", "*.*")],
@@ -946,8 +990,7 @@ class App:
             return False
         ext = os.path.splitext(path)[1].lower() or ".png"
         filename = f"{hero.replace(' ', '_').replace('&', 'and')}_{kind}{ext}"
-        dest_dir = self._art_dir_for(kind)
-        dest = os.path.join(dest_dir, filename)
+        dest = os.path.join(self._art_dir_for(kind), filename)
         try:
             shutil.copyfile(path, dest)
         except OSError as exc:
@@ -956,11 +999,14 @@ class App:
         setattr(self.cfg.heroes[hero], kind, filename)
         self.cfg.save()
         self._accent_cache.pop(hero, None)
+        # Invalidate cached thumbnails for this file (colour may change too).
+        self._thumb_cache = {k: v for k, v in self._thumb_cache.items() if k[0] != dest}
         self._append_log(f"{kind.capitalize()} set for {hero}.")
         if self.hero_var.get() == hero:
             self._update_stage(hero)
         return True
 
+    # ---------------------------------------------------------- hero CRUD
     def _add_hero(self) -> None:
         name = self.new_hero_var.get().strip()
         if not name:
@@ -988,6 +1034,19 @@ class App:
         self.cfg.save()
         self._render_hero_rows()
 
+    def _persist_hero_edits(self) -> None:
+        for hero, var in self.playlist_vars.items():
+            if hero in self.cfg.heroes:
+                self.cfg.heroes[hero].playlist_uri = var.get().strip()
+        for field, vars_map in (("color_main", self.color_main_vars),
+                                ("color_accent", self.color_accent_vars)):
+            for hero, var in vars_map.items():
+                if hero in self.cfg.heroes:
+                    value = var.get().strip()
+                    if not value or theming.is_valid_hex(value):
+                        setattr(self.cfg.heroes[hero], field, value)
+        self.cfg.save()
+
     def _save_heroes(self, silent: bool = False) -> None:
         for hero, var in self.playlist_vars.items():
             self.cfg.heroes[hero].playlist_uri = var.get().strip()
@@ -1005,6 +1064,7 @@ class App:
         if not silent:
             self._append_log("Saved hero mappings (playlists + colours).")
 
+    # ---------------------------------------------------------- settings
     def _save_settings(self, silent: bool = False) -> None:
         self.cfg.spotify.client_id = self.client_id_var.get().strip()
         self.cfg.spotify.client_secret = self.client_secret_var.get().strip()
@@ -1022,7 +1082,6 @@ class App:
         self.cfg.gep_packages_url = self.pkg_url_var.get().strip()
         self.cfg.gep_debug = bool(self.gep_debug_var.get())
         self.cfg.save()
-        # Apply the new FPS to a live Stage immediately.
         if self.stage and self.stage.alive:
             self.stage.set_fps(self.cfg.stage_fps)
         if not silent:
@@ -1032,8 +1091,10 @@ class App:
         self.client_id_var.set(self.cfg.spotify.client_id)
         self.client_secret_var.set(self.cfg.spotify.client_secret)
         self.redirect_var.set(self.cfg.spotify.redirect_uri)
+        self._status_sig = None
         self._refresh_status()
 
+    # ---------------------------------------------------------- teardown
     def _on_close(self) -> None:
         self.monitor.stop()
         if self.stage:
@@ -1045,19 +1106,14 @@ class App:
 
 
 def _enable_dpi_awareness() -> None:
-    """Make the process per-monitor DPI aware so windows fill scaled monitors.
-
-    On a 150%/200%-scaled display a DPI-unaware window is bitmap-stretched and
-    its content ends up occupying only a fraction of the screen when maximised
-    or fullscreened. Declaring per-monitor-v2 awareness makes Tk geometry map to
-    physical pixels. Harmless / no-op off Windows."""
+    """Per-monitor-v2 DPI awareness so windows fill scaled monitors instead of
+    being bitmap-stretched to a quarter of the screen. No-op off Windows."""
     if not sys.platform.startswith("win"):
         return
     try:
         import ctypes
-        # PER_MONITOR_AWARE_V2 = -4
         if not ctypes.windll.user32.SetProcessDpiAwarenessContext(-4):
-            ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PER_MONITOR_AWARE
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
     except Exception:
         pass
 

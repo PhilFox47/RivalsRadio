@@ -9,4 +9,4 @@ No game memory is read or modified — hero data comes from Overwolf's supported
 Game Events, so it does not interact with anti-cheat.
 """
 
-__version__ = "0.2.2"
+__version__ = "0.4.0"

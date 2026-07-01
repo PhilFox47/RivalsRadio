@@ -69,9 +69,17 @@ class Monitor:
             self._source.stop()
             self._source = None
 
+    # Placeholder names the game reports in lobbies / between competitive
+    # rounds. They are not real heroes, so switching (and resetting the
+    # playlist) on them would be wrong — drop them at the choke point so no
+    # source can ever act on one.
+    _IGNORED_READINGS = {"unknown", "none", "null", ""}
+
     def _on_candidate(self, hero: str) -> None:
         """A source reported a (confident) current hero."""
-        hero = self.cfg.canonical_hero(hero)
+        if hero is None or hero.strip().lower() in self._IGNORED_READINGS:
+            return
+        hero = self.cfg.canonical_hero(hero.strip())
         if hero == self._current_hero:
             return
         self._switch_hero(hero)

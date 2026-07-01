@@ -132,6 +132,10 @@ function emitHero(v) {
   }
   if (!name) return;
   name = String(name);
+  // Lobbies / between-round screens report placeholder names — never real
+  // heroes. Ignore them so the playlist isn't reset outside a match.
+  const upper = name.trim().toUpperCase();
+  if (upper === '' || upper === 'UNKNOWN' || upper === 'NONE' || upper === 'NULL') return;
   if (name !== lastHero) { lastHero = name; post({ type: 'hero', hero: name }); }
 }
 
