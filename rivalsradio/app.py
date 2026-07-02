@@ -645,10 +645,10 @@ class App:
                       variable=self.bg_blur_var, width=220,
                       progress_color=ACCENT, button_color=ACCENT,
                       button_hover_color=ACCENT_HOVER,
-                      command=lambda v: self._blur_value_lbl.configure(
-                          text=f"{int(float(v))} px")).pack(side="left")
+                      command=self._on_blur_slider).pack(side="left")
         self._blur_value_lbl.pack(side="left", padx=8)
-        ctk.CTkLabel(pf, text="Applies to per-hero background pictures (Heroes → Art…).",
+        ctk.CTkLabel(pf, text="Applies live to per-hero background pictures "
+                     "(Heroes → Art…).",
                      font=self.f_small, text_color=FAINT).pack(anchor="w", padx=18, pady=(0, 4))
         self.nowplaying_var = tk.BooleanVar(value=self.cfg.show_now_playing)
         ctk.CTkSwitch(pf, text="Show now-playing (track + album art)",
@@ -666,6 +666,29 @@ class App:
             height=34, font=self.f_small, corner_radius=8,
             command=self._toggle_web_overlay, **NEUTRAL_BTN)
         self.web_btn.pack(anchor="w", padx=18, pady=(8, 14))
+
+        # Stage effects — everything applies live, no restart needed.
+        ef = self._card(scroll, "Stage effects")
+        ctk.CTkLabel(ef, text="All changes apply to the Stage immediately.",
+                     font=self.f_small, text_color=FAINT).pack(anchor="w", padx=18, pady=(0, 4))
+        grid = ctk.CTkFrame(ef, fg_color="transparent")
+        grid.pack(fill="x", padx=18, pady=(2, 4))
+        switches = [
+            ("Hero switch animation", "stage_switch_anim"),
+            ("Floating particles", "stage_particles"),
+            ("Beat edge glow", "stage_vignette"),
+            ("Album-art ambience", "stage_album_ambience"),
+            ("Peak caps on bars", "stage_peak_caps"),
+            ("Live KDA overlay", "stage_show_kda"),
+            ("Idle showcase (clock + roster)", "stage_idle_showcase"),
+        ]
+        for i, (text, attr) in enumerate(switches):
+            self._stage_switch(grid, text, attr).grid(
+                row=i // 2, column=i % 2, sticky="w", padx=(0, 24), pady=4)
+        self._stage_slider(ef, "Edge glow strength", "stage_vignette_strength", 0, 100)
+        self._stage_slider(ef, "Logo pulse depth", "stage_pulse_strength", 0, 100)
+        self._stage_slider(ef, "Background dim", "stage_bg_dim", 0, 100, refresh=True)
+        ctk.CTkFrame(ef, fg_color="transparent", height=8).pack()
 
         # Advanced: ow-electron bridge (kept out of the way; native is default).
         df = self._card(scroll, "Advanced — ow-electron GEP bridge")
@@ -839,6 +862,77 @@ class App:
         self.cfg.stage_style = self.style_var.get()
         self.cfg.save()
         self._append_log(f"Visualizer layout set to '{self.cfg.stage_style}'.")
+
+    def _stage_switch(self, parent, text: str, attr: str):
+        """A live on/off toggle bound to a Config attribute (saved on change)."""
+        var = tk.BooleanVar(value=bool(getattr(self.cfg, attr, True)))
+
+        def apply():
+            setattr(self.cfg, attr, bool(var.get()))
+            self.cfg.save()
+            self._append_log(f"{text}: {'on' if var.get() else 'off'}.")
+
+        return ctk.CTkSwitch(parent, text=text, variable=var, command=apply,
+                             font=self.f_body, progress_color=ACCENT)
+
+    def _stage_slider(self, parent, label: str, attr: str, lo: int, hi: int,
+                      refresh: bool = False) -> None:
+        """A live slider bound to a Config attribute (debounced save; optional
+        Stage asset refresh for values baked into rendered images)."""
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=18, pady=5)
+        ctk.CTkLabel(row, text=label, font=self.f_body, text_color=MUTED,
+                     width=180, anchor="w").pack(side="left")
+        var = tk.IntVar(value=int(getattr(self.cfg, attr, lo)))
+        val_lbl = ctk.CTkLabel(row, text=str(var.get()), font=self.f_small,
+                               text_color=FAINT, width=36)
+
+        def commit(v: int) -> None:
+            setattr(self, f"_sl_after_{attr}", None)
+            if v == getattr(self.cfg, attr):
+                return
+            setattr(self.cfg, attr, v)
+            self.cfg.save()
+            if refresh and self.stage and self.stage.alive:
+                self.stage.refresh()
+
+        def on_move(value) -> None:
+            v = int(float(value))
+            val_lbl.configure(text=str(v))
+            pending = getattr(self, f"_sl_after_{attr}", None)
+            if pending is not None:
+                try:
+                    self.root.after_cancel(pending)
+                except Exception:
+                    pass
+            setattr(self, f"_sl_after_{attr}", self.root.after(350, lambda: commit(v)))
+
+        ctk.CTkSlider(row, from_=lo, to=hi, number_of_steps=hi - lo, variable=var,
+                      width=220, progress_color=ACCENT, button_color=ACCENT,
+                      button_hover_color=ACCENT_HOVER, command=on_move).pack(side="left")
+        val_lbl.pack(side="left", padx=8)
+
+    def _on_blur_slider(self, value) -> None:
+        """Apply the background blur live while dragging (debounced ~350ms so we
+        don't re-render the background for every intermediate slider tick)."""
+        px = int(float(value))
+        self._blur_value_lbl.configure(text=f"{px} px")
+        if getattr(self, "_blur_after", None) is not None:
+            try:
+                self.root.after_cancel(self._blur_after)
+            except Exception:
+                pass
+        self._blur_after = self.root.after(350, lambda: self._apply_blur(px))
+
+    def _apply_blur(self, px: int) -> None:
+        self._blur_after = None
+        if px == self.cfg.stage_bg_blur:
+            return
+        self.cfg.stage_bg_blur = px
+        self.cfg.save()
+        if self.stage and self.stage.alive:
+            self.stage.refresh()
+        self._append_log(f"Background blur set to {px} px.")
 
     def _toggle_gep_debug(self) -> None:
         self.cfg.gep_debug = bool(self.gep_debug_var.get())

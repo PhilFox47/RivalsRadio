@@ -79,6 +79,17 @@ class Config:
     stage_style: str = "bars"       # visualizer layout: "bars" or "radial"
     stage_fps: int = 144            # Stage redraw target (frames per second)
     stage_bg_blur: int = 12         # blur radius (px) for hero background images
+    stage_bg_dim: int = 60          # darkening of hero background images (0-100)
+    # Stage effects (all read live by the Stage).
+    stage_particles: bool = True        # floating accent particles
+    stage_vignette: bool = True         # beat-reactive edge glow
+    stage_vignette_strength: int = 70   # edge glow intensity (0-100)
+    stage_pulse_strength: int = 100     # logo beat-pulse depth (0-100)
+    stage_album_ambience: bool = True   # album-art colour glow (gradient bg only)
+    stage_show_kda: bool = True         # live K/D/A strip
+    stage_switch_anim: bool = True      # hero-switch panel animation
+    stage_idle_showcase: bool = True    # clock + roster showcase when no music
+    stage_peak_caps: bool = True        # falling peak caps on the bars
     show_now_playing: bool = True   # show track + album art + progress on Stage
     web_overlay_enabled: bool = False  # serve the Stage as an OBS browser source
     web_overlay_port: int = 8770
@@ -192,6 +203,16 @@ class Config:
             stage_style=raw.get("stage_style", "bars"),
             stage_fps=int(raw.get("stage_fps", 144)),
             stage_bg_blur=int(raw.get("stage_bg_blur", 12)),
+            stage_bg_dim=int(raw.get("stage_bg_dim", 60)),
+            stage_particles=raw.get("stage_particles", True),
+            stage_vignette=raw.get("stage_vignette", True),
+            stage_vignette_strength=int(raw.get("stage_vignette_strength", 70)),
+            stage_pulse_strength=int(raw.get("stage_pulse_strength", 100)),
+            stage_album_ambience=raw.get("stage_album_ambience", True),
+            stage_show_kda=raw.get("stage_show_kda", True),
+            stage_switch_anim=raw.get("stage_switch_anim", True),
+            stage_idle_showcase=raw.get("stage_idle_showcase", True),
+            stage_peak_caps=raw.get("stage_peak_caps", True),
             show_now_playing=raw.get("show_now_playing", True),
             web_overlay_enabled=raw.get("web_overlay_enabled", False),
             web_overlay_port=raw.get("web_overlay_port", 8770),
@@ -245,6 +266,16 @@ class Config:
             "stage_style": self.stage_style,
             "stage_fps": self.stage_fps,
             "stage_bg_blur": self.stage_bg_blur,
+            "stage_bg_dim": self.stage_bg_dim,
+            "stage_particles": self.stage_particles,
+            "stage_vignette": self.stage_vignette,
+            "stage_vignette_strength": self.stage_vignette_strength,
+            "stage_pulse_strength": self.stage_pulse_strength,
+            "stage_album_ambience": self.stage_album_ambience,
+            "stage_show_kda": self.stage_show_kda,
+            "stage_switch_anim": self.stage_switch_anim,
+            "stage_idle_showcase": self.stage_idle_showcase,
+            "stage_peak_caps": self.stage_peak_caps,
             "show_now_playing": self.show_now_playing,
             "web_overlay_enabled": self.web_overlay_enabled,
             "web_overlay_port": self.web_overlay_port,

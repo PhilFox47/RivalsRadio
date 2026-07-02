@@ -133,9 +133,10 @@ def _radial_sprite(size: int, rgb, core: float = 1.0) -> Image.Image:
     return Image.fromarray(arr, "RGB")
 
 
-def _render_photo_bg(path: str, w: int, h: int, blur: int) -> Optional[Image.Image]:
+def _render_photo_bg(path: str, w: int, h: int, blur: int,
+                     dim: int = 60) -> Optional[Image.Image]:
     """Cover-fit a hero background picture to (w, h), blur and darken it so the
-    foreground (logo, text, bars) stays readable."""
+    foreground (logo, text, bars) stays readable. ``dim`` is 0-100."""
     img = _open_rgba(path)
     if img is None:
         return None
@@ -156,7 +157,8 @@ def _render_photo_bg(path: str, w: int, h: int, blur: int) -> Optional[Image.Ima
             img = small.resize((w, h), Image.BILINEAR)
         else:
             img = img.filter(ImageFilter.GaussianBlur(blur))
-    return Image.eval(img, lambda v: int(v * 0.52))
+    factor = max(0.2, 1.0 - 0.8 * max(0, min(100, dim)) / 100.0)
+    return Image.eval(img, lambda v: int(v * factor))
 
 
 def _vignette_sprite(w: int, h: int, rgb) -> Image.Image:
@@ -303,6 +305,7 @@ class StageWindow:
         self._takeover: Optional[dict] = None   # victory/defeat
         self._match_seen = self.state.match_seq
         self._pulse = 0.0
+        self._vig_env = 0.0    # slow-release envelope for the edge glow
         self._levels = [0.0] * self.visualizer.bands
         self._peaks = [0.0] * self.visualizer.bands
         self._last_play = time.perf_counter()
@@ -450,13 +453,15 @@ class StageWindow:
         p = dict(w=self.W, h=self.H, main=self._main, accent=self._accent,
                  logo=self._logo_path, sig=self._sig_path, por=self._portrait_path,
                  bgimg=self._bgimg_path,
-                 blur=max(0, int(getattr(self.cfg, "stage_bg_blur", 12))))
+                 blur=max(0, int(getattr(self.cfg, "stage_bg_blur", 12))),
+                 dim=int(getattr(self.cfg, "stage_bg_dim", 60)))
 
         def work():
             try:
                 bg = None
                 if p["bgimg"]:
-                    bg = _render_photo_bg(p["bgimg"], p["w"], p["h"], p["blur"])
+                    bg = _render_photo_bg(p["bgimg"], p["w"], p["h"], p["blur"],
+                                          p["dim"])
                 photo = bg is not None
                 if bg is None:
                     bg = _render_bg(p["w"], p["h"], p["main"], p["accent"])
@@ -582,7 +587,13 @@ class StageWindow:
             self._bgimg_path = st.background_path
             self._request_assets()
             if not first:
-                self._anim = {"phase": "in", "t0": time.perf_counter()}
+                # Never show the previous hero's portrait on the wipe panel —
+                # the panel carries the new name immediately and the portrait
+                # joins as soon as the new batch lands (the hold phase waits
+                # for it anyway).
+                self._portrait = None
+                if getattr(self.cfg, "stage_switch_anim", True):
+                    self._anim = {"phase": "in", "t0": time.perf_counter()}
                 self._idle = None
 
         # Victory / defeat takeover trigger.
@@ -595,6 +606,7 @@ class StageWindow:
             self._last_play = time.perf_counter()
             self._idle = None
         elif (self._idle is None and self._anim is None
+              and getattr(self.cfg, "stage_idle_showcase", True)
               and time.perf_counter() - self._last_play > IDLE_AFTER_S):
             self._idle = {"t0": time.perf_counter(), "i": 0, "surf": None, "prev": None}
 
@@ -674,29 +686,43 @@ class StageWindow:
         else:
             self.screen.fill(BG_DARK)
 
+        cfg = self.cfg
         self._update_album_ambience()
         # Album ambience only over the gradient background — on a photo
         # background it would wash the picture out.
-        if self._album_glow is not None and not self._has_photo_bg:
+        if (self._album_glow is not None and not self._has_photo_bg
+                and getattr(cfg, "stage_album_ambience", True)):
             self.screen.blit(self._album_glow,
                              ((self.W - self._album_glow.get_width()) // 2,
                               (self.H - self._album_glow.get_height()) // 2),
                              special_flags=self.pg.BLEND_ADD)
 
-        self._draw_particles(dt)
+        if getattr(cfg, "stage_particles", True):
+            self._draw_particles(dt)
 
         beat = self._beat()
         attack = beat > self._pulse
         self._pulse += (beat - self._pulse) * (0.55 if attack else 0.16)
 
-        if self._vignette is not None and self._pulse > 0.04:
-            self._vignette.set_alpha(int(150 * self._pulse))
-            self.screen.blit(self._vignette, (0, 0), special_flags=self.pg.BLEND_ADD)
+        # Edge glow rides its own slow-release envelope (frame-rate aware) so it
+        # breathes with the music instead of snapping on/off with each kick.
+        k = 60.0 / self._fps
+        rise = beat > self._vig_env
+        self._vig_env += (beat - self._vig_env) * (min(1.0, 0.25 * k) if rise
+                                                   else min(1.0, 0.035 * k))
+        if self._vignette is not None and getattr(cfg, "stage_vignette", True):
+            strength = getattr(cfg, "stage_vignette_strength", 70) / 100.0
+            a = int(170 * strength * self._vig_env)
+            if a >= 2:
+                self._vignette.set_alpha(a)
+                self.screen.blit(self._vignette, (0, 0),
+                                 special_flags=self.pg.BLEND_ADD)
 
         cx, cy = self.W // 2, int(self.H * 0.46)
         # Logo (pulse ladder) or hero-name fallback.
         if self._ladder:
-            idx = int(self._pulse * (PULSE_STEPS - 1))
+            depth = getattr(cfg, "stage_pulse_strength", 100) / 100.0
+            idx = int(self._pulse * (PULSE_STEPS - 1) * depth)
             idx = max(0, min(idx, len(self._ladder) - 1))
             fr = self._ladder[idx]
             self.screen.blit(fr, (cx - fr.get_width() // 2, cy - fr.get_height() // 2))
@@ -712,7 +738,8 @@ class StageWindow:
         if self.cfg.show_now_playing:
             self._draw_now_playing(dt)
         self._draw_visualizer(dt)
-        self._draw_kda()
+        if getattr(cfg, "stage_show_kda", True):
+            self._draw_kda()
 
         hint = self._text("Double-click / F11 fullscreen · Esc exit",
                           max(10, int(self.H * 0.014)), (86, 92, 99), bold=False)
@@ -828,13 +855,15 @@ class StageWindow:
         max_h = max(8, int(H * 0.30))
         col = self._accent
         cap_col = tuple(min(255, int(c * 1.35)) for c in col)
+        caps = getattr(self.cfg, "stage_peak_caps", True)
         rect = self.pg.draw.rect
         for i in range(n):
             x = margin + i * (bw + gap)
             bh = int(2 + self._levels[i] * max_h)
             rect(self.screen, col, (x, base - bh, bw, bh))
-            py = base - int(2 + self._peaks[i] * max_h)
-            rect(self.screen, cap_col, (x, py - 3, bw, 3))
+            if caps:
+                py = base - int(2 + self._peaks[i] * max_h)
+                rect(self.screen, cap_col, (x, py - 3, bw, 3))
 
     def _draw_radial_bars(self) -> None:
         """Bars radiate outward FROM the logo's edge."""
@@ -848,6 +877,7 @@ class StageWindow:
         lmax = int(min(self.W, self.H) * 0.20)
         col = self._accent
         cap_col = tuple(min(255, int(c * 1.35)) for c in col)
+        caps = getattr(self.cfg, "stage_peak_caps", True)
         width = max(2, int(2 * math.pi * r0 / n * 0.45))
         line = self.pg.draw.line
         for i in range(n):
@@ -857,9 +887,10 @@ class StageWindow:
             x0, y0 = cx + ca * r0, cy + sa * r0
             line(self.screen, col, (x0, y0), (cx + ca * (r0 + ln), cy + sa * (r0 + ln)),
                  width)
-            pr = r0 + 2 + self._peaks[i] * lmax
-            line(self.screen, cap_col, (cx + ca * pr, cy + sa * pr),
-                 (cx + ca * (pr + 3), cy + sa * (pr + 3)), width)
+            if caps:
+                pr = r0 + 2 + self._peaks[i] * lmax
+                line(self.screen, cap_col, (cx + ca * pr, cy + sa * pr),
+                     (cx + ca * (pr + 3), cy + sa * (pr + 3)), width)
 
     # ----- KDA strip -------------------------------------------------- [#12]
     def _draw_kda(self) -> None:
@@ -1013,4 +1044,5 @@ class StageWindow:
                              (143, 149, 156), bold=False)
             self.screen.blit(sub, ((self.W - sub.get_width()) // 2,
                                    int(self.H * 0.12) + clock_s.get_height() + 8))
-        self._draw_particles(dt)
+        if getattr(self.cfg, "stage_particles", True):
+            self._draw_particles(dt)
