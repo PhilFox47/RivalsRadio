@@ -236,20 +236,15 @@ class StageWindow:
         self._bg = None
         self._has_photo = False
         self._glow = None
-        self._bloom = None
-        self._gold = None
         self._ladder: List = []
         self._ladder_pending: List = []
         self._sig = None
         self._portrait = None
         self._strip = None                 # bar gradient strip
-        self._strip_glow = None
         self._strip_h = 0
         self._panel = None
         self._dots: List = []
         self._np_card = None
-        self._bolts: List = []             # ult lightning polylines
-        self._bolt_t = 0.0
 
         # Asset pipeline.
         self._q: "queue.Queue[Tuple[int, dict]]" = queue.Queue()
@@ -421,7 +416,6 @@ class StageWindow:
                     bg = _gradient_bg(w, h, main, accent)
 
                 ladder = []
-                bloom_t = None
                 logo = _open_rgba(logo_p)
                 if logo is not None:
                     base = _tint_white(_fit(logo, int(w * 0.42), int(h * 0.42)), main)
@@ -431,19 +425,6 @@ class StageWindow:
                             (max(1, int(base.width * sc)),
                              max(1, int(base.height * sc))), Image.BILINEAR)
                         ladder.append((fr.tobytes(), fr.size))
-                    # Bloom: the logo silhouette baked bright on black, blurred —
-                    # blitted additively under the logo for a soft halo.
-                    pad = max(8, int(base.width * 0.14))
-                    canvas = Image.new("RGB", (base.width + 2 * pad,
-                                               base.height + 2 * pad), (0, 0, 0))
-                    lift = _tint_white(base, (255, 255, 255))
-                    bright = ImageChops.screen(base.convert("RGB"),
-                                               Image.eval(lift.convert("RGB"),
-                                                          lambda v: int(v * 0.25)))
-                    canvas.paste(bright, (pad, pad), base.getchannel("A"))
-                    bloom = canvas.filter(
-                        ImageFilter.GaussianBlur(max(4, int(base.width * 0.05))))
-                    bloom_t = (bloom.tobytes(), bloom.size)
 
                 sig = _open_rgba(sig_p)
                 sig_t = None
@@ -462,19 +443,13 @@ class StageWindow:
 
                 strip_h = max(8, int(h * 0.30)) + 6
                 strip = _bar_strip(4, strip_h, accent)
-                # A dimmer copy blitted additively (wider) behind each bar
-                # gives the bars a soft glow without per-frame blurring.
-                strip_glow = _bar_strip(4, strip_h, colors.scale(accent, 0.45))
-                gold = _soft_dot(int(min(w, h) * 0.52), (255, 190, 60), core=0.6)
 
                 self._q.put((req, dict(
                     size=(w, h), photo=photo,
                     bg=(bg.tobytes(), bg.size),
-                    ladder=ladder, sig=sig_t, por=por_t, bloom=bloom_t,
+                    ladder=ladder, sig=sig_t, por=por_t,
                     glow=(glow.tobytes(), glow.size),
-                    gold=(gold.tobytes(), gold.size),
                     strip=(strip.tobytes(), strip.size),
-                    strip_glow=(strip_glow.tobytes(), strip_glow.size),
                     strip_h=strip_h)))
             except Exception:
                 pass
@@ -519,10 +494,7 @@ class StageWindow:
         def s_rest():
             self._sig = self._rgba(a["sig"])
             self._glow = self._rgb(a["glow"])
-            self._bloom = self._rgb(a["bloom"]) if a["bloom"] else None
-            self._gold = self._rgb(a["gold"])
             self._strip = self._rgb(a["strip"])
-            self._strip_glow = self._rgb(a["strip_glow"])
             self._strip_h = a["strip_h"]
             self._dots = []
             self._np_card = None
@@ -592,31 +564,26 @@ class StageWindow:
         else:
             self.screen.fill(BG_BASE)
 
+        # The beat envelope is already a clean per-kick pulse (instant attack,
+        # ~150 ms decay, one fire per kick). Track it closely: fast on the way
+        # up (2–3 frames), and follow the envelope down — the logo thumps in
+        # lockstep with the bass drum.
         beat = self.feed.beat()
-        # Near-instant attack, quick fall: the logo visibly THUMPS on each
-        # kick instead of swelling with overall loudness.
         rise = beat > self._pulse
-        self._pulse += (beat - self._pulse) * (0.85 if rise else 0.11)
+        self._pulse += (beat - self._pulse) * (0.7 if rise else 0.5)
         self._glow_t += dt
 
         if st.particles:
             self._draw_particles(dt, accent, beat)
 
-        # Breathing glow behind the logo (kicked by the beat).
+        # Breathing glow behind the logo (kicked gently by the beat).
         cx, cy = self.W // 2, int(self.H * 0.44)
         if self._glow is not None and st.glow > 0:
-            breathe = 0.5 + 0.22 * math.sin(self._glow_t * 0.7)
-            level = min(1.0, breathe + self._pulse * 0.8)
+            breathe = 0.55 + 0.25 * math.sin(self._glow_t * 0.7)
+            level = min(1.0, breathe + self._pulse * 0.6)
             self._glow.set_alpha(int(2.1 * st.glow * level))
             self.screen.blit(self._glow, (cx - self._glow.get_width() // 2,
                                           cy - self._glow.get_height() // 2),
-                             special_flags=self.pg.BLEND_ADD)
-
-        # Bloom halo under the logo (soft blurred copy, additive).
-        if self._bloom is not None and st.glow > 0:
-            self._bloom.set_alpha(int((st.glow / 100.0) * (90 + 150 * self._pulse)))
-            self.screen.blit(self._bloom, (cx - self._bloom.get_width() // 2,
-                                           cy - self._bloom.get_height() // 2),
                              special_flags=self.pg.BLEND_ADD)
 
         # Logo (pulse ladder) or the hero name as fallback.
@@ -630,10 +597,6 @@ class StageWindow:
         elif v and v.name:
             t = self._text(v.name, max(26, int(self.H * 0.09)), colors.rgb_to_hex(main))
             self.screen.blit(t, (cx - t.get_width() // 2, cy - t.get_height() // 2))
-
-        # Ultimate charged: golden energy frame + lightning over the logo.
-        if self.feed.ult() >= 100:
-            self._draw_ult(cx, cy)
 
         if self._sig is not None:
             pad = int(self.H * 0.045)
@@ -692,51 +655,6 @@ class StageWindow:
             x = (p["x"] + math.sin(p["ph"]) * 0.012) * self.W - dot.get_width() / 2
             self.screen.blit(dot, (x, p["y"] * self.H - dot.get_height() / 2),
                              special_flags=add)
-
-    def _draw_ult(self, cx: int, cy: int) -> None:
-        """Golden 'ultimate ready' energy: rotating triangle frames, a hot gold
-        glow and flickering lightning bolts around the logo."""
-        pg = self.pg
-        now = time.perf_counter()
-        base = self._ladder[0].get_width() if self._ladder else int(min(self.W, self.H) * 0.3)
-        r = int(base * 0.62) + int(min(self.W, self.H) * 0.02)
-
-        if self._gold is not None:
-            flicker = 0.5 + 0.5 * math.sin(now * 9.0)
-            self._gold.set_alpha(int(min(255, 110 + 70 * flicker + 60 * self._pulse)))
-            self.screen.blit(self._gold, (cx - self._gold.get_width() // 2,
-                                          cy - self._gold.get_height() // 2),
-                             special_flags=pg.BLEND_ADD)
-
-        GOLD = (255, 200, 50)
-        GOLD_HI = (255, 235, 140)
-        lw = max(2, int(self.H * 0.004))
-        for speed, phase, col, rf in ((0.9, 0.0, GOLD, 1.16),
-                                      (-0.6, 2.1, GOLD_HI, 1.30)):
-            ang = now * speed + phase
-            rr = r * rf
-            pts = [(cx + math.cos(ang + j * math.tau / 3) * rr,
-                    cy + math.sin(ang + j * math.tau / 3) * rr) for j in range(3)]
-            pg.draw.polygon(self.screen, col, pts, lw)
-
-        # Lightning: short jagged radial sparks, regenerated ~11×/s.
-        if now >= self._bolt_t:
-            self._bolt_t = now + 0.09
-            self._bolts = []
-            for _ in range(random.randint(2, 3)):
-                a0 = random.uniform(0, math.tau)
-                r0, r1 = r * 0.72, r * 1.5
-                steps = 5
-                pts = []
-                for s in range(steps + 1):
-                    rr = r0 + (r1 - r0) * s / steps
-                    wob = random.uniform(-r * 0.14, r * 0.14) if 0 < s < steps else 0.0
-                    aa = a0 + wob / max(1.0, rr)
-                    pts.append((cx + math.cos(aa) * rr, cy + math.sin(aa) * rr))
-                self._bolts.append(pts)
-        for pts in self._bolts:
-            pg.draw.lines(self.screen, GOLD, False, pts, lw)
-            pg.draw.lines(self.screen, (255, 255, 215), False, pts, 1)
 
     def _draw_now_playing(self) -> None:
         tr = self.feed.track()
@@ -826,16 +744,10 @@ class StageWindow:
         base = int(self.H * 0.965)
         max_h = max(8, int(self.H * 0.30))
         cap = tuple(min(255, int(c * 1.5)) for c in accent)
-        # Scale the gradient strips to the bar width ONCE per size change.
+        # Scale the gradient strip to the bar width ONCE per size change.
         strip = self._strip
         if strip is not None and strip.get_width() != bw:
             strip = self._strip = self.pg.transform.scale(strip, (bw, self._strip_h))
-        gw = bw + 8
-        sglow = self._strip_glow
-        if sglow is not None and sglow.get_width() != gw:
-            sglow = self._strip_glow = self.pg.transform.scale(
-                sglow, (gw, self._strip_h))
-        add = self.pg.BLEND_ADD
         for i in range(n):
             target = float(spec[i]) if spec is not None and i < len(spec) else 0.0
             target = max(target, 0.02)
@@ -843,12 +755,6 @@ class StageWindow:
             self._peaks[i] = max(self._peaks[i] - fall, self._levels[i])
             x = margin + i * (bw + gap)
             bh = max(2, int(self._levels[i] * max_h))
-            # Soft additive glow behind the bar (slightly wider + taller).
-            if sglow is not None:
-                gh = min(self._strip_h, bh + 5)
-                self.screen.blit(sglow, (x - 4, base - gh),
-                                 area=(0, self._strip_h - gh, gw, gh),
-                                 special_flags=add)
             if strip is not None and self._strip_h >= bh:
                 # Bottom-anchored slice of the pre-rendered gradient.
                 self.screen.blit(strip, (x, base - bh),

@@ -5,8 +5,10 @@ rolling FFT and exposes:
 
 - ``spectrum()`` — 56 log-spaced band magnitudes in [0, 1], smoothed
   (snappy attack / gentle decay), updated ~187×/s for fluid high-FPS bars.
-- ``beat()``    — a bass-onset envelope in [0, 1] that spikes on kick hits and
-  decays (~200 ms), so pulses follow the beat rather than sustained loudness.
+- ``beat()``    — a kick-drum envelope in [0, 1]. A real onset detector
+  (adaptive threshold over bass flux + a refractory period) fires exactly once
+  per kick and drives a snappy attack / ~190 ms decay envelope, so visuals
+  lock to the beat instead of twitching with noise.
 
 Degrades gracefully: without a capture backend, both return silence.
 """
@@ -88,6 +90,10 @@ class AudioEngine:
         buf = np.zeros(BLOCK, dtype=np.float32)
         peak = 1e-6
         bass_prev = -1.0
+        flux_avg = 0.02          # adaptive flux baseline (kicks excluded)
+        flux_dev = 0.01          # adaptive flux deviation
+        bass_slow = -1.0         # slow bass level baseline (~1.3s memory)
+        cooldown = 0             # refractory hops after a detected kick
         beat_env = 0.0
         try:
             with mic.recorder(samplerate=SAMPLERATE, channels=1,
@@ -115,18 +121,34 @@ class AudioEngine:
                         rise, smoothed + (norm - smoothed) * 0.28,
                         smoothed + (norm - smoothed) * 0.06).astype(np.float32)
 
-                    # Bass-onset envelope: react to the RISE in bass energy so
-                    # it tracks the kick drum, not sustained loudness. High
-                    # gain + hard gate + fast decay = a distinct hit per beat.
+                    # Kick detection — an onset DETECTOR, not a flux
+                    # passthrough. A hit must (a) rise faster than an adaptive
+                    # threshold learned from non-kick flux, and (b) lift the
+                    # bass LEVEL clearly above its slow baseline (rejects
+                    # noise jitter and slow bass swells alike). Each detection
+                    # fires once (~120 ms refractory) and snaps the envelope
+                    # to 1.0; it then decays with a ~150 ms half-life — a
+                    # clean, musical thump per bass-drum hit.
                     bass = float(norm[:self._bass_n].mean())
                     if bass_prev < 0.0:
                         bass_prev = bass
+                        bass_slow = bass
                     flux = max(0.0, bass - bass_prev)
                     bass_prev = bass
-                    onset = min(1.0, flux * 6.0)
-                    if onset <= 0.10:
-                        onset = 0.0
-                    beat_env = max(beat_env * 0.88, onset)
+                    if cooldown > 0:
+                        cooldown -= 1
+                    thr = max(0.045, flux_avg * 5 + 4 * flux_dev)
+                    if flux > thr and bass > bass_slow + 0.05 and cooldown == 0:
+                        beat_env = 1.0
+                        cooldown = 23              # ≈120 ms at the hop rate
+                    else:
+                        beat_env *= 0.9755
+                        if beat_env < 0.002:
+                            beat_env = 0.0
+                    if flux <= thr:                # don't learn from kicks
+                        flux_avg += (flux - flux_avg) * 0.01
+                        flux_dev += (abs(flux - flux_avg) - flux_dev) * 0.01
+                    bass_slow += (bass - bass_slow) * 0.004
 
                     with self._lock:
                         self._spectrum = smoothed.copy()
