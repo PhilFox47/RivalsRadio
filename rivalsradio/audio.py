@@ -115,16 +115,18 @@ class AudioEngine:
                         rise, smoothed + (norm - smoothed) * 0.28,
                         smoothed + (norm - smoothed) * 0.06).astype(np.float32)
 
-                    # Bass-onset envelope: react to the RISE in bass energy.
+                    # Bass-onset envelope: react to the RISE in bass energy so
+                    # it tracks the kick drum, not sustained loudness. High
+                    # gain + hard gate + fast decay = a distinct hit per beat.
                     bass = float(norm[:self._bass_n].mean())
                     if bass_prev < 0.0:
                         bass_prev = bass
                     flux = max(0.0, bass - bass_prev)
                     bass_prev = bass
-                    onset = min(1.0, flux * 4.0)
-                    if onset <= 0.12:
+                    onset = min(1.0, flux * 6.0)
+                    if onset <= 0.10:
                         onset = 0.0
-                    beat_env = max(beat_env * 0.90, onset)
+                    beat_env = max(beat_env * 0.88, onset)
 
                     with self._lock:
                         self._spectrum = smoothed.copy()

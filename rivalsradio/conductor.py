@@ -38,7 +38,8 @@ class Conductor:
         self.detector = Detector(cfg.detector_port,
                                  on_hero=self._hero_detected,
                                  on_game=on_game,
-                                 on_log=on_log)
+                                 on_log=on_log,
+                                 on_ult=feed.set_ult)
         self.current_hero: Optional[str] = None
         self._palette_cache: dict = {}
         self._np_stop = threading.Event()
@@ -88,6 +89,7 @@ class Conductor:
                         f"playlist for it in the Heroes tab.")
             self.on_roster_change()
         self.on_hero_ui(name)
+        self.feed.set_ult(0)            # new hero starts uncharged
         self.feed.set_hero(self.visuals_for(name))
         self._play_for(name, source)
 

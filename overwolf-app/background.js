@@ -74,6 +74,8 @@ function onRunningChanged(info) {
     if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
     lastHero = null;
     lastResult = null;
+    lastUlt = -1;
+    post({ type: 'ult', charge: 0 });
   }
 }
 
@@ -111,6 +113,8 @@ function scan(obj, depth) {
   });
 }
 
+let lastUlt = -1;
+
 function tryRoster(v) {
   let o = v;
   if (typeof v === 'string') { try { o = JSON.parse(v); } catch (_) { return; } }
@@ -119,6 +123,11 @@ function tryRoster(v) {
     if (o.character_name) emitHero({ name: o.character_name });
     if (o.kills != null || o.deaths != null || o.assists != null) {
       post({ type: 'stats', kills: +o.kills || 0, deaths: +o.deaths || 0, assists: +o.assists || 0 });
+    }
+    // Ultimate charge percent (docs: roster_N.ult_charge, local player incl.).
+    if (o.ult_charge != null) {
+      const c = Math.max(0, Math.min(100, Number(o.ult_charge) || 0));
+      if (c !== lastUlt) { lastUlt = c; post({ type: 'ult', charge: c }); }
     }
   }
 }

@@ -43,6 +43,7 @@ class Feed:
         self._lock = threading.Lock()
         self._hero = HeroVisuals()
         self._track = Track()
+        self._ult = 0                   # ultimate charge percent (0–100)
         self._audio = None              # attached AudioEngine (or None)
 
     def attach_audio(self, audio) -> None:
@@ -66,6 +67,15 @@ class Feed:
     def track(self) -> Track:
         with self._lock:
             return self._track
+
+    # ----- ultimate charge ------------------------------------------------
+    def set_ult(self, charge: int) -> None:
+        with self._lock:
+            self._ult = max(0, min(100, int(charge)))
+
+    def ult(self) -> int:
+        with self._lock:
+            return self._ult
 
     # ----- audio --------------------------------------------------------
     def spectrum(self):
