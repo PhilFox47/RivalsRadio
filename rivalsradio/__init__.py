@@ -1,12 +1,8 @@
-"""RivalsRadio — play a Spotify playlist matched to your current Marvel Rivals hero.
+"""RivalsRadio — hero-aware Spotify for Marvel Rivals.
 
-Hero detection runs through the companion native Overwolf app (or the
-ow-electron GEP bridge), which reports your current hero over localhost; you can
-also switch heroes manually from the UI. RivalsRadio then switches Spotify
-playback and drives a themed, audio-reactive Stage view.
-
-No game memory is read or modified — hero data comes from Overwolf's supported
-Game Events, so it does not interact with anti-cheat.
+The companion native Overwolf app reports your current hero over localhost;
+RivalsRadio switches Spotify to that hero's playlist and drives a GPU-rendered
+Stage view (audio visualizer) for a second screen.
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"

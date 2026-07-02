@@ -1,46 +1,27 @@
-# PyInstaller spec for RivalsRadio.
-# Build with:  pyinstaller RivalsRadio.spec
-# Produces a single windowed executable in dist/ (no console window).
+# PyInstaller spec for RivalsRadio.  Build with:  pyinstaller RivalsRadio.spec
 
 from PyInstaller.utils.hooks import collect_data_files
 
-block_cipher = None
-
-# CustomTkinter ships its themes/fonts as data files that must be bundled.
-ctk_datas = collect_data_files("customtkinter")
-# Bundle the app icon so the window can set it at runtime too.
-ctk_datas += [("assets/icon.ico", "assets")]
+datas = collect_data_files("customtkinter")
+# Ship the app icon and the default hero roster + art.
+datas += [("assets", "assets")]
 
 a = Analysis(
     ["main.py"],
     pathex=[],
     binaries=[],
-    datas=ctk_datas,
-    # spotipy is imported lazily in places; list these so PyInstaller's static
-    # analysis definitely bundles them.
+    datas=datas,
     hiddenimports=[
-        "numpy",
-        "PIL",
-        "PIL.ImageTk",
-        "spotipy",
-        "spotipy.oauth2",
-        "soundcard",
-        "cffi",
-        "customtkinter",
-        "darkdetect",
-        "pygame",
+        "numpy", "PIL", "PIL.ImageTk", "spotipy", "spotipy.oauth2",
+        "soundcard", "cffi", "customtkinter", "darkdetect", "pygame",
     ],
     hookspath=[],
-    hooksconfig={},
     runtime_hooks=[],
     excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
     noarchive=False,
 )
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure, a.zipped_data)
 
 exe = EXE(
     pyz,
@@ -51,19 +32,9 @@ exe = EXE(
     [],
     name="RivalsRadio",
     debug=False,
-    bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,          # windowed app: no terminal window
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
+    console=False,
     icon="assets/icon.ico",
-    # Marvel Rivals runs elevated (anti-cheat); Overwolf GEP then requires this
-    # app to be elevated too. Request admin on launch so hero detection works.
-    uac_admin=True,
 )

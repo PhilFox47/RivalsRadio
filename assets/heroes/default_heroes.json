@@ -1,0 +1,479 @@
+{
+  "DEADPOOL VANGUARD": {
+    "playlist": "https://open.spotify.com/playlist/40CI2PI3urziGddNvdZeeR?si=cdfbfff18c184f5e",
+    "logo": "DEADPOOL_VANGUARD_logo.webp",
+    "portrait": "DEADPOOL_VANGUARD_portrait.webp",
+    "signature": "DEADPOOL_VANGUARD_signature.webp",
+    "background": "",
+    "color_main": "#b90746",
+    "color_accent": "#000080"
+  },
+  "ANGELA": {
+    "playlist": "https://open.spotify.com/playlist/0FbQ6401GCFJNnKIXubyNk?si=bbd547b3ec584275",
+    "logo": "ANGELA_logo.webp",
+    "portrait": "ANGELA_portrait.webp",
+    "signature": "ANGELA_signature.webp",
+    "background": "",
+    "color_main": "#ffff00",
+    "color_accent": "#ff0000"
+  },
+  "DOCTOR STRANGE": {
+    "playlist": "https://open.spotify.com/playlist/4D0LehI7vEQHnMwdaUpNE8?si=be1e425fd1ca4dee",
+    "logo": "DOCTOR_STRANGE_logo.webp",
+    "portrait": "DOCTOR_STRANGE_portrait.webp",
+    "signature": "DOCTOR_STRANGE_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "CAPTAIN AMERICA": {
+    "playlist": "https://open.spotify.com/playlist/3KOwxkWnKPKyMe0Qi0ZhQK?si=6845f6eb2567416f",
+    "logo": "CAPTAIN_AMERICA_logo.webp",
+    "portrait": "CAPTAIN_AMERICA_portrait.webp",
+    "signature": "CAPTAIN_AMERICA_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "GROOT": {
+    "playlist": "https://open.spotify.com/playlist/6cnMKa6G0YbjOOhtbiTWug?si=26490018c0574720",
+    "logo": "GROOT_logo.webp",
+    "portrait": "GROOT_portrait.webp",
+    "signature": "GROOT_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "VENOM": {
+    "playlist": "https://open.spotify.com/playlist/37ZasI3Wpz6jGtL21BerwG?si=09e0bdd07c4f4aca",
+    "logo": "VENOM_logo.webp",
+    "portrait": "VENOM_portrait.webp",
+    "signature": "VENOM_signature.webp",
+    "background": "",
+    "color_main": "#ffffff",
+    "color_accent": "#ffffff"
+  },
+  "MAGNETO": {
+    "playlist": "https://open.spotify.com/playlist/6DMxMvmoJpCQe9yqvCa1yZ?si=fe9f762ca5e249b2",
+    "logo": "MAGNETO_logo.webp",
+    "portrait": "MAGNETO_portrait.webp",
+    "signature": "MAGNETO_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "THOR": {
+    "playlist": "https://open.spotify.com/playlist/5XHg4O2lsHhmG14QlaJk6r?si=1f447c1694474a75",
+    "logo": "THOR_logo.webp",
+    "portrait": "THOR_portrait.webp",
+    "signature": "THOR_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "PENI PARKER": {
+    "playlist": "https://open.spotify.com/playlist/2blOerUQzXpYbiXNaIL0j4?si=e6b9a1104e944be9",
+    "logo": "PENI_PARKER_logo.webp",
+    "portrait": "PENI_PARKER_portrait.webp",
+    "signature": "PENI_PARKER_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "THE THING": {
+    "playlist": "https://open.spotify.com/playlist/1vM1NZIenwmGBv7sciOzTH?si=78bab4f13dc34c17",
+    "logo": "THE_THING_logo.webp",
+    "portrait": "THE_THING_portrait.webp",
+    "signature": "THE_THING_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "EMMA FROST": {
+    "playlist": "https://open.spotify.com/playlist/5PRIeeyLYsJJoAjVgko1HA?si=039399200289422b",
+    "logo": "EMMA_FROST_logo.webp",
+    "portrait": "EMMA_FROST_portrait.webp",
+    "signature": "EMMA_FROST_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "DEVIL DINOSAUR": {
+    "playlist": "https://open.spotify.com/playlist/7nB6NaafwVeWX7Er8MnrFA?si=e3311aaf48c14438",
+    "logo": "DEVIL_DINOSAUR_logo.webp",
+    "portrait": "DEVIL_DINOSAUR_portrait.webp",
+    "signature": "DEVIL_DINOSAUR_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "BRUCE BANNER": {
+    "playlist": "https://open.spotify.com/playlist/55b7nAzgumx6VDUkov4Ugw?si=05ee2704ba3f411c",
+    "logo": "BRUCE_BANNER_logo.webp",
+    "portrait": "BRUCE_BANNER_portrait.webp",
+    "signature": "BRUCE_BANNER_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "ROGUE": {
+    "playlist": "https://open.spotify.com/playlist/0WTyqY7nAkkhw9xCUtaG3h?si=c5bf58974b304940",
+    "logo": "ROGUE_logo.webp",
+    "portrait": "ROGUE_portrait.webp",
+    "signature": "ROGUE_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "SPIDER-MAN": {
+    "playlist": "https://open.spotify.com/playlist/67jqxdftQEYC8tJpMBxIu2?si=e70b127fdced45e4",
+    "logo": "SPIDER-MAN_logo.webp",
+    "portrait": "SPIDER-MAN_portrait.webp",
+    "signature": "SPIDER-MAN_signature.webp",
+    "background": "",
+    "color_main": "#cd0532",
+    "color_accent": "#ffffff"
+  },
+  "THE PUNISHER": {
+    "playlist": "https://open.spotify.com/playlist/0cGktoHCvR5I2E71nL8hVx?si=ab124db687984dd5",
+    "logo": "THE_PUNISHER_logo.webp",
+    "portrait": "THE_PUNISHER_portrait.webp",
+    "signature": "THE_PUNISHER_signature.webp",
+    "background": "",
+    "color_main": "#ffffff",
+    "color_accent": "#ffffff"
+  },
+  "HELA": {
+    "playlist": "https://open.spotify.com/playlist/2XIaRhtvWM2w1aK370jrKu?si=b78644ac861343f0",
+    "logo": "HELA_logo.webp",
+    "portrait": "HELA_portrait.webp",
+    "signature": "HELA_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "MOON KNIGHT": {
+    "playlist": "https://open.spotify.com/playlist/6az1HkSH8k23qSBZbrmWrQ?si=1225dc9af34049b1",
+    "logo": "MOON_KNIGHT_logo.webp",
+    "portrait": "MOON_KNIGHT_portrait.webp",
+    "signature": "MOON_KNIGHT_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "SQUIRREL GIRL": {
+    "playlist": "https://open.spotify.com/playlist/7mqIpbPNNGWRTcPZZBsq0Y?si=26d0144f5cd0449b",
+    "logo": "SQUIRREL_GIRL_logo.webp",
+    "portrait": "SQUIRREL_GIRL_portrait.webp",
+    "signature": "SQUIRREL_GIRL_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "IRON MAN": {
+    "playlist": "https://open.spotify.com/playlist/5xUksn0OtVPM9pamTK1ABV?si=f57da4c853da444d",
+    "logo": "IRON_MAN_logo.webp",
+    "portrait": "IRON_MAN_portrait.webp",
+    "signature": "IRON_MAN_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "SCARLET WITCH": {
+    "playlist": "https://open.spotify.com/playlist/0JxEQqyY4DMwXW65Hb1peg?si=91c0c8cf4ddb43dd",
+    "logo": "SCARLET_WITCH_logo.webp",
+    "portrait": "SCARLET_WITCH_portrait.webp",
+    "signature": "SCARLET_WITCH_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "NAMOR": {
+    "playlist": "https://open.spotify.com/playlist/3mNVh8OMpRR1Zhn7xHiYQh?si=675599a1016c41c9",
+    "logo": "NAMOR_logo.webp",
+    "portrait": "NAMOR_portrait.webp",
+    "signature": "NAMOR_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "DEADPOOL DUELIST": {
+    "playlist": "https://open.spotify.com/playlist/6ndEARN8I3h4J3aBbgyMsZ?si=6c50b10b0d364f81",
+    "logo": "DEADPOOL_DUELIST_logo.webp",
+    "portrait": "DEADPOOL_DUELIST_portrait.webp",
+    "signature": "DEADPOOL_DUELIST_signature.webp",
+    "background": "",
+    "color_main": "#b90746",
+    "color_accent": "#b90746"
+  },
+  "STORM": {
+    "playlist": "https://open.spotify.com/playlist/1m9bsnMIB4CHaS43GszDsV?si=57dadb1215574186",
+    "logo": "STORM_logo.webp",
+    "portrait": "STORM_portrait.webp",
+    "signature": "STORM_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "HAWKEYE": {
+    "playlist": "https://open.spotify.com/playlist/5blxzTbOqMpoBTZQHOsWei?si=d9c1440b16d84d0b",
+    "logo": "HAWKEYE_logo.webp",
+    "portrait": "HAWKEYE_portrait.webp",
+    "signature": "HAWKEYE_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "BLACK PANTHER": {
+    "playlist": "https://open.spotify.com/playlist/7HgYhkSp1lKXcusg6hpUem?si=535afe8f7057436b",
+    "logo": "BLACK_PANTHER_logo.webp",
+    "portrait": "BLACK_PANTHER_portrait.webp",
+    "signature": "BLACK_PANTHER_signature.webp",
+    "background": "",
+    "color_main": "#ffffff",
+    "color_accent": "#f0c40f"
+  },
+  "MAGIK": {
+    "playlist": "https://open.spotify.com/playlist/033MBz6IukTY7MkaGMlMPm?si=56a16f5566024301",
+    "logo": "MAGIK_logo.webp",
+    "portrait": "MAGIK_portrait.webp",
+    "signature": "MAGIK_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "BLACK WIDOW": {
+    "playlist": "https://open.spotify.com/playlist/3wOezqD9K1AZclZKIPM4rC?si=d66a8420fe6c4bf0",
+    "logo": "BLACK_WIDOW_logo.webp",
+    "portrait": "BLACK_WIDOW_portrait.webp",
+    "signature": "BLACK_WIDOW_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "WINTER SOLDIER": {
+    "playlist": "https://open.spotify.com/playlist/4nhsMDsF5r0pvIdOrGbbk2?si=2b38c37dd0c84a9c",
+    "logo": "WINTER_SOLDIER_logo.webp",
+    "portrait": "WINTER_SOLDIER_portrait.webp",
+    "signature": "WINTER_SOLDIER_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "STAR-LORD": {
+    "playlist": "https://open.spotify.com/playlist/0rZAZ9lalWEstqm7tmwike?si=0c6a379685fd4bf7",
+    "logo": "STAR-LORD_logo.webp",
+    "portrait": "STAR-LORD_portrait.webp",
+    "signature": "STAR-LORD_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "PSYLOCKE": {
+    "playlist": "https://open.spotify.com/playlist/24L1syvEn28GiR8hgk4xR4?si=6348723ffcd340ee",
+    "logo": "PSYLOCKE_logo.webp",
+    "portrait": "PSYLOCKE_portrait.webp",
+    "signature": "PSYLOCKE_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "WOLVERINE": {
+    "playlist": "https://open.spotify.com/playlist/5iX3A5ktONMxX2uerTc2Pp?si=f0ff37a425ba48d7",
+    "logo": "WOLVERINE_logo.webp",
+    "portrait": "WOLVERINE_portrait.webp",
+    "signature": "WOLVERINE_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "IRON FIST": {
+    "playlist": "https://open.spotify.com/playlist/31wMrW2OidTtMXHiMC7p6d?si=fc2fd7512fc646ab",
+    "logo": "IRON_FIST_logo.webp",
+    "portrait": "IRON_FIST_portrait.webp",
+    "signature": "IRON_FIST_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "MISTER FANTASTIC": {
+    "playlist": "https://open.spotify.com/playlist/1oPXxsdGZoLbwg713MB2Wo?si=8ad7a8d31a81433c",
+    "logo": "MISTER_FANTASTIC_logo.webp",
+    "portrait": "MISTER_FANTASTIC_portrait.webp",
+    "signature": "MISTER_FANTASTIC_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "HUMAN TORCH": {
+    "playlist": "https://open.spotify.com/playlist/0aqEE3bN4BDQ1wQ0ATkdAn?si=f35aa6aa065c4345",
+    "logo": "HUMAN_TORCH_logo.webp",
+    "portrait": "HUMAN_TORCH_portrait.webp",
+    "signature": "HUMAN_TORCH_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "PHOENIX": {
+    "playlist": "https://open.spotify.com/playlist/5OEPm9wOymOfgskBRO1gug?si=32654b22a564456f",
+    "logo": "PHOENIX_logo.webp",
+    "portrait": "PHOENIX_portrait.webp",
+    "signature": "PHOENIX_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "BLADE": {
+    "playlist": "https://open.spotify.com/playlist/0wakcsV0atBjmqFv2vXXrZ?si=9174636e29514607",
+    "logo": "BLADE_logo.webp",
+    "portrait": "BLADE_portrait.webp",
+    "signature": "BLADE_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "DAREDEVIL": {
+    "playlist": "https://open.spotify.com/playlist/2WaRHxeCLxdhk6bXXOCsns?si=8fb971a7b435453d",
+    "logo": "DAREDEVIL_logo.webp",
+    "portrait": "DAREDEVIL_portrait.webp",
+    "signature": "DAREDEVIL_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "ELSA BLOODSTONE": {
+    "playlist": "https://open.spotify.com/playlist/0sBZackGlQH1GBSsuuWhjD?si=764f93ec996e4aee",
+    "logo": "ELSA_BLOODSTONE_logo.webp",
+    "portrait": "ELSA_BLOODSTONE_portrait.webp",
+    "signature": "ELSA_BLOODSTONE_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "BLACK CAT": {
+    "playlist": "https://open.spotify.com/playlist/5FMCxurPYnMfi3bnMychMz?si=e393ef65c2e649ee",
+    "logo": "BLACK_CAT_logo.webp",
+    "portrait": "BLACK_CAT_portrait.webp",
+    "signature": "BLACK_CAT_signature.webp",
+    "background": "",
+    "color_main": "#690f96",
+    "color_accent": "#ffffff"
+  },
+  "CYCLOPS": {
+    "playlist": "https://open.spotify.com/playlist/4oJe7AYwQyJHAuuIU5EBfD?si=6b3228333b504e6d",
+    "logo": "CYCLOPS_logo.webp",
+    "portrait": "CYCLOPS_portrait.webp",
+    "signature": "CYCLOPS_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "LOKI": {
+    "playlist": "https://open.spotify.com/playlist/2K8NYHsxwiH2WZ5cCchTBn?si=225d80e763b2472a",
+    "logo": "LOKI_logo.webp",
+    "portrait": "LOKI_portrait.webp",
+    "signature": "LOKI_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "MANTIS": {
+    "playlist": "https://open.spotify.com/playlist/2oAZdkH0KtmXY4N4oN8hTK?si=a55d2ec70b924e2e",
+    "logo": "MANTIS_logo.webp",
+    "portrait": "MANTIS_portrait.webp",
+    "signature": "MANTIS_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "ROCKET RACCOON": {
+    "playlist": "https://open.spotify.com/playlist/101vTsrU94XFHcAlXHcz3O?si=deea888c49784782",
+    "logo": "ROCKET_RACCOON_logo.webp",
+    "portrait": "ROCKET_RACCOON_portrait.webp",
+    "signature": "ROCKET_RACCOON_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "CLOAK & DAGGER": {
+    "playlist": "https://open.spotify.com/playlist/2svkEivaQToyn4lmCna4Dg?si=dda4366737dd4ac7",
+    "logo": "CLOAK_and_DAGGER_logo.webp",
+    "portrait": "CLOAK_and_DAGGER_portrait.webp",
+    "signature": "CLOAK_and_DAGGER_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "LUNA SNOW": {
+    "playlist": "https://open.spotify.com/playlist/1SzXoBE4L9ppduzIpBkEmR?si=d6c2c02b17fe4c97",
+    "logo": "LUNA_SNOW_logo.webp",
+    "portrait": "LUNA_SNOW_portrait.webp",
+    "signature": "LUNA_SNOW_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "ADAM WARLOCK": {
+    "playlist": "https://open.spotify.com/playlist/61rp4HCkBInQ9CeS0UXXEv?si=9e9bc230567343e9",
+    "logo": "ADAM_WARLOCK_logo.webp",
+    "portrait": "ADAM_WARLOCK_portrait.webp",
+    "signature": "ADAM_WARLOCK_signature.webp",
+    "background": "",
+    "color_main": "#f0c40f",
+    "color_accent": "#ff8000"
+  },
+  "INVISIBLE WOMAN": {
+    "playlist": "https://open.spotify.com/playlist/7wMkRYhI5jqxwq6mLJOKhO?si=a46256828d8f4639",
+    "logo": "INVISIBLE_WOMAN_logo.webp",
+    "portrait": "INVISIBLE_WOMAN_portrait.webp",
+    "signature": "INVISIBLE_WOMAN_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "GAMBIT": {
+    "playlist": "https://open.spotify.com/playlist/5PZRtbzLzt29yL0c1eIy2T?si=10f45001d6b5490f",
+    "logo": "GAMBIT_logo.webp",
+    "portrait": "GAMBIT_portrait.webp",
+    "signature": "GAMBIT_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "DEADPOOL STRATEGIST": {
+    "playlist": "https://open.spotify.com/playlist/01aggtlEJ2b1uH8WOwtlcu?si=dbaffd822e4d4973",
+    "logo": "DEADPOOL_STRATEGIST_logo.webp",
+    "portrait": "DEADPOOL_STRATEGIST_portrait.webp",
+    "signature": "DEADPOOL_STRATEGIST_signature.webp",
+    "background": "",
+    "color_main": "#b90746",
+    "color_accent": "#008000"
+  },
+  "JEFF THE LAND SHARK": {
+    "playlist": "https://open.spotify.com/playlist/0oUCZ9KfSdvvsHyyx4PyQc?si=85c681686fcd4c6e",
+    "logo": "JEFF_THE_LAND_SHARK_logo.webp",
+    "portrait": "JEFF_THE_LAND_SHARK_portrait.webp",
+    "signature": "JEFF_THE_LAND_SHARK_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  },
+  "ULTRON": {
+    "playlist": "https://open.spotify.com/playlist/27Mw5CdTweGkZrhAPcsrIx?si=e0517af5f757469b",
+    "logo": "ULTRON_logo.webp",
+    "portrait": "ULTRON_portrait.webp",
+    "signature": "ULTRON_signature.webp",
+    "background": "",
+    "color_main": "#ff0000",
+    "color_accent": "#c0c0c0"
+  },
+  "WHITE FOX": {
+    "playlist": "https://open.spotify.com/playlist/1feVYo1oLf6OXuZzfVYuui?si=4f3c2eff28d3418a",
+    "logo": "WHITE_FOX_logo.webp",
+    "portrait": "WHITE_FOX_portrait.webp",
+    "signature": "WHITE_FOX_signature.webp",
+    "background": "",
+    "color_main": "",
+    "color_accent": ""
+  }
+}

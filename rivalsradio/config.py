@@ -1,146 +1,87 @@
-"""Persistent configuration for RivalsRadio.
+"""Configuration: settings + hero roster, persisted as one JSON file.
 
-Stored as a single JSON file next to the app data, plus image folders
-(``avatars/``, ``logos/``, ``signatures/``) for per-hero Stage artwork.
+First run seeds the roster (heroes, playlists, colours) and the hero art from
+the assets shipped with the app, so a fresh install is immediately usable.
+If a pre-0.6 config exists, the user's Spotify credentials and per-hero
+customisations are imported once.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import dataclass, field, fields, asdict
 from typing import Dict, Optional
 
+from . import paths
+from .paths import ART_KINDS
 
-def app_data_dir() -> str:
-    """Return (and create) a per-user directory to store config + artwork."""
-    base = os.environ.get("RIVALSRADIO_HOME")
-    if not base:
-        base = os.path.join(os.path.expanduser("~"), ".rivalsradio")
-    os.makedirs(base, exist_ok=True)
-    os.makedirs(os.path.join(base, "avatars"), exist_ok=True)
-    return base
+CONFIG_NAME = "rivalsradio.json"
+LEGACY_CONFIG = "config.json"
 
 
 @dataclass
-class SpotifyConfig:
+class SpotifySettings:
     client_id: str = ""
     client_secret: str = ""
-    # Spotify requires the loopback IP (127.0.0.1), not "localhost", in redirect
-    # URIs — and the value here must match the dashboard entry exactly.
+    # Spotify requires the loopback IP (127.0.0.1) — it rejects "localhost".
     redirect_uri: str = "http://127.0.0.1:8888/callback"
-    # Optional: name of the device to start playback on (e.g. "DESKTOP-PC").
-    # Leave blank to use whatever device is currently active in Spotify.
     device_name: str = ""
 
 
 @dataclass
-class HeroConfig:
-    playlist_uri: str = ""
-    # Filename (relative to avatars/) of legacy hero artwork (unused by the Stage
-    # now; kept for backward-compat with older configs).
-    avatar: str = ""
-    # Filename (relative to logos/) of the hero logo shown centred on the Stage
-    # (pulses with the audio).
-    logo: str = ""
-    # Filename (relative to signatures/) of the hero signature shown top-right.
-    signature: str = ""
-    # Filename (relative to portraits/) of the hero portrait: shown in the
-    # hero-switch animation and used for automatic colour extraction.
-    portrait: str = ""
-    # Filename (relative to backgrounds/) of the full-scene Stage background
-    # picture (blurred per the Stage settings).
-    background: str = ""
-    # Per-hero Stage colours as "#RRGGBB". main = background/glow, accent = bars.
-    # Blank = auto-extract from the portrait/logo, falling back to the default.
-    color_main: str = ""
-    color_accent: str = ""
-    # Legacy single accent (migrated into color_accent on load).
-    accent: str = ""
+class StageSettings:
+    fps: int = 144                  # render target (30–160)
+    bg_blur: int = 12               # background picture blur (px)
+    bg_dim: int = 55                # background picture darkening (0–100)
+    particles: bool = True          # drifting accent particles
+    glow: int = 70                  # logo glow strength (0–100)
+    pulse: int = 90                 # logo beat-pulse depth (0–100)
+    show_now_playing: bool = True
+    switch_anim: bool = True        # hero-switch panel animation
 
-    def is_empty(self) -> bool:
-        """True if the hero has no user-set data (a bare auto-added entry)."""
-        return not any((self.playlist_uri, self.avatar, self.logo, self.signature,
-                        self.portrait, self.background,
-                        self.color_main, self.color_accent, self.accent))
+
+@dataclass
+class Hero:
+    playlist: str = ""              # Spotify playlist URL or URI
+    logo: str = ""                  # filenames inside the user art dirs
+    portrait: str = ""
+    signature: str = ""
+    background: str = ""
+    color_main: str = ""            # blank = auto from portrait
+    color_accent: str = ""
 
     @classmethod
-    def from_dict(cls, data: dict) -> "HeroConfig":
+    def from_dict(cls, data: dict) -> "Hero":
         known = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in data.items() if k in known})
+
+    def art_file(self, kind: str) -> str:
+        return getattr(self, kind, "")
+
+    def art_path(self, kind: str) -> Optional[str]:
+        name = self.art_file(kind)
+        if not name:
+            return None
+        p = os.path.join(paths.art_dir(kind), name)
+        return p if os.path.exists(p) else None
+
+    def art_complete(self) -> bool:
+        return all(self.art_file(k) for k in ART_KINDS)
 
 
 @dataclass
 class Config:
-    spotify: SpotifyConfig = field(default_factory=SpotifyConfig)
-    heroes: Dict[str, HeroConfig] = field(default_factory=dict)
+    spotify: SpotifySettings = field(default_factory=SpotifySettings)
+    stage: StageSettings = field(default_factory=StageSettings)
+    heroes: Dict[str, Hero] = field(default_factory=dict)
+    detector_port: int = 8771       # the native Overwolf app POSTs here
+    autostart: bool = True          # connect + listen on launch
 
-    # Stage / presentation.
-    stage_style: str = "bars"       # visualizer layout: "bars" or "radial"
-    stage_fps: int = 144            # Stage redraw target (frames per second)
-    stage_bg_blur: int = 12         # blur radius (px) for hero background images
-    stage_bg_dim: int = 60          # darkening of hero background images (0-100)
-    # Stage effects (all read live by the Stage).
-    stage_particles: bool = True        # floating accent particles
-    stage_vignette: bool = True         # beat-reactive edge glow
-    stage_vignette_strength: int = 70   # edge glow intensity (0-100)
-    stage_pulse_strength: int = 100     # logo beat-pulse depth (0-100)
-    stage_album_ambience: bool = True   # album-art colour glow (gradient bg only)
-    stage_show_kda: bool = True         # live K/D/A strip
-    stage_switch_anim: bool = True      # hero-switch panel animation
-    stage_idle_showcase: bool = True    # clock + roster showcase when no music
-    stage_peak_caps: bool = True        # falling peak caps on the bars
-    show_now_playing: bool = True   # show track + album art + progress on Stage
-    web_overlay_enabled: bool = False  # serve the Stage as an OBS browser source
-    web_overlay_port: int = 8770
-
-    setup_complete: bool = False
-
-    # Hero detection source: "native" (Overwolf native app over localhost) or
-    # "gep" (ow-electron bridge).
-    hero_source: str = "native"
-    # Command to launch the ow-electron GEP bridge. Blank = bundled bridge.
-    gep_bridge_cmd: str = ""
-    # When true, the bridge writes raw GEP events to gep-debug.log.
-    gep_debug: bool = False
-    # Override the ow-electron packages endpoint. Blank = Overwolf PROD.
-    gep_packages_url: str = ""
-    # Localhost port the native Overwolf app POSTs hero data to ("native" source).
-    native_port: int = 8771
-    # One-time flag: the legacy pre-filled default roster has been purged so the
-    # list now auto-populates purely from detected heroes.
-    roster_purged: bool = False
-
-    @property
-    def avatars_dir(self) -> str:
-        return os.path.join(app_data_dir(), "avatars")
-
-    @property
-    def logos_dir(self) -> str:
-        d = os.path.join(app_data_dir(), "logos")
-        os.makedirs(d, exist_ok=True)
-        return d
-
-    @property
-    def signatures_dir(self) -> str:
-        d = os.path.join(app_data_dir(), "signatures")
-        os.makedirs(d, exist_ok=True)
-        return d
-
-    @property
-    def portraits_dir(self) -> str:
-        d = os.path.join(app_data_dir(), "portraits")
-        os.makedirs(d, exist_ok=True)
-        return d
-
-    @property
-    def backgrounds_dir(self) -> str:
-        d = os.path.join(app_data_dir(), "backgrounds")
-        os.makedirs(d, exist_ok=True)
-        return d
-
-    def canonical_hero(self, name: str) -> str:
-        """Resolve a detected hero name to the roster's canonical spelling."""
+    # ----- roster ---------------------------------------------------------
+    def canonical(self, name: str) -> str:
+        """Resolve a detected name to the roster's spelling (case-insensitive)."""
         if name in self.heroes:
             return name
         low = name.lower()
@@ -149,141 +90,113 @@ class Config:
                 return key
         return name
 
-    def avatar_path(self, hero: str) -> Optional[str]:
-        h = self.heroes.get(hero)
-        if not h or not h.avatar:
-            return None
-        return os.path.join(self.avatars_dir, h.avatar)
+    # ----- persistence ------------------------------------------------
+    @staticmethod
+    def path() -> str:
+        return os.path.join(paths.data_dir(), CONFIG_NAME)
 
-    def logo_path(self, hero: str) -> Optional[str]:
-        h = self.heroes.get(hero)
-        if not h or not h.logo:
-            return None
-        return os.path.join(self.logos_dir, h.logo)
-
-    def signature_path(self, hero: str) -> Optional[str]:
-        h = self.heroes.get(hero)
-        if not h or not h.signature:
-            return None
-        return os.path.join(self.signatures_dir, h.signature)
-
-    def portrait_path(self, hero: str) -> Optional[str]:
-        h = self.heroes.get(hero)
-        if not h or not h.portrait:
-            return None
-        return os.path.join(self.portraits_dir, h.portrait)
-
-    def background_path(self, hero: str) -> Optional[str]:
-        h = self.heroes.get(hero)
-        if not h or not h.background:
-            return None
-        return os.path.join(self.backgrounds_dir, h.background)
-
-    # ----- persistence ---------------------------------------------------
-    @classmethod
-    def path(cls) -> str:
-        return os.path.join(app_data_dir(), "config.json")
+    def save(self) -> None:
+        doc = {
+            "version": 1,
+            "spotify": asdict(self.spotify),
+            "stage": asdict(self.stage),
+            "detector_port": self.detector_port,
+            "autostart": self.autostart,
+            "heroes": {n: asdict(h) for n, h in self.heroes.items()},
+        }
+        tmp = self.path() + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh, indent=2)
+        os.replace(tmp, self.path())
 
     @classmethod
     def load(cls) -> "Config":
-        path = cls.path()
-        if not os.path.exists(path):
-            # Start with an empty roster — it auto-populates from detected heroes.
-            cfg = cls(roster_purged=True)
-            cfg.save()
+        cfg = cls()
+        p = cls.path()
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as fh:
+                    raw = json.load(fh)
+            except Exception:
+                raw = {}
+            sp = raw.get("spotify", {})
+            cfg.spotify = SpotifySettings(**{
+                k: v for k, v in sp.items()
+                if k in {f.name for f in fields(SpotifySettings)}})
+            st = raw.get("stage", {})
+            cfg.stage = StageSettings(**{
+                k: v for k, v in st.items()
+                if k in {f.name for f in fields(StageSettings)}})
+            cfg.detector_port = int(raw.get("detector_port", 8771))
+            cfg.autostart = bool(raw.get("autostart", True))
+            cfg.heroes = {n: Hero.from_dict(h)
+                          for n, h in raw.get("heroes", {}).items()}
             return cfg
-        with open(path, "r", encoding="utf-8") as fh:
-            raw = json.load(fh)
-        cfg = cls(
-            spotify=SpotifyConfig(**{
-                k: v for k, v in raw.get("spotify", {}).items()
-                if k in {f.name for f in fields(SpotifyConfig)}}),
-            heroes={name: HeroConfig.from_dict(data)
-                    for name, data in raw.get("heroes", {}).items()},
-            stage_style=raw.get("stage_style", "bars"),
-            stage_fps=int(raw.get("stage_fps", 144)),
-            stage_bg_blur=int(raw.get("stage_bg_blur", 12)),
-            stage_bg_dim=int(raw.get("stage_bg_dim", 60)),
-            stage_particles=raw.get("stage_particles", True),
-            stage_vignette=raw.get("stage_vignette", True),
-            stage_vignette_strength=int(raw.get("stage_vignette_strength", 70)),
-            stage_pulse_strength=int(raw.get("stage_pulse_strength", 100)),
-            stage_album_ambience=raw.get("stage_album_ambience", True),
-            stage_show_kda=raw.get("stage_show_kda", True),
-            stage_switch_anim=raw.get("stage_switch_anim", True),
-            stage_idle_showcase=raw.get("stage_idle_showcase", True),
-            stage_peak_caps=raw.get("stage_peak_caps", True),
-            show_now_playing=raw.get("show_now_playing", True),
-            web_overlay_enabled=raw.get("web_overlay_enabled", False),
-            web_overlay_port=raw.get("web_overlay_port", 8770),
-            setup_complete=raw.get("setup_complete", False),
-            hero_source=raw.get("hero_source", "native"),
-            gep_bridge_cmd=raw.get("gep_bridge_cmd", ""),
-            gep_debug=raw.get("gep_debug", False),
-            gep_packages_url=raw.get("gep_packages_url", ""),
-            native_port=raw.get("native_port", 8771),
-            roster_purged=raw.get("roster_purged", False),
-        )
-        cfg._migrate()
+        # First run: seed from the shipped defaults (and any pre-0.6 config).
+        cfg._seed_from_bundle()
+        cfg._import_legacy()
+        cfg.save()
         return cfg
 
-    def _migrate(self) -> None:
-        changed = False
-        if self.spotify.redirect_uri.strip() in (
-                "http://localhost:8888/callback", "http://localhost:8888/callback/"):
-            self.spotify.redirect_uri = "http://127.0.0.1:8888/callback"
-            changed = True
-        if self.gep_packages_url.strip() == "https://electronapi-qa.overwolf.com/packages":
-            self.gep_packages_url = ""
-            changed = True
-        # Screen capture was removed; point old sources at native.
-        if self.hero_source in ("auto", "screen"):
-            self.hero_source = "native"
-            changed = True
-        # Fold the legacy single accent into the new accent colour.
-        for h in self.heroes.values():
-            if h.accent and not h.color_accent:
-                h.color_accent = h.accent
-                changed = True
-        # One-time purge of the legacy pre-filled roster: drop bare, unconfigured
-        # entries so the list now auto-populates purely from detected heroes.
-        if not self.roster_purged:
-            self.heroes = {name: h for name, h in self.heroes.items()
-                           if not h.is_empty()}
-            self.roster_purged = True
-            changed = True
-        if changed:
-            self.save()
+    # ----- first-run seeding -------------------------------------------
+    def _seed_from_bundle(self) -> None:
+        """Install the shipped roster + art into the user data dir."""
+        try:
+            with open(paths.bundled("assets", "heroes", "default_heroes.json"),
+                      "r", encoding="utf-8") as fh:
+                defaults = json.load(fh)
+        except Exception:
+            return
+        for name, data in defaults.items():
+            hero = Hero.from_dict(data)
+            for kind in ART_KINDS:
+                fname = hero.art_file(kind)
+                if not fname:
+                    continue
+                src = paths.bundled("assets", "heroes", kind + "s", fname)
+                dst = os.path.join(paths.art_dir(kind), fname)
+                if os.path.exists(src) and not os.path.exists(dst):
+                    try:
+                        shutil.copyfile(src, dst)
+                    except OSError:
+                        setattr(hero, kind, "")
+            self.heroes[name] = hero
 
-    def save(self) -> None:
-        with open(self.path(), "w", encoding="utf-8") as fh:
-            json.dump(self._to_dict(), fh, indent=2)
-
-    def _to_dict(self) -> dict:
-        return {
-            "spotify": asdict(self.spotify),
-            "heroes": {name: asdict(h) for name, h in self.heroes.items()},
-            "stage_style": self.stage_style,
-            "stage_fps": self.stage_fps,
-            "stage_bg_blur": self.stage_bg_blur,
-            "stage_bg_dim": self.stage_bg_dim,
-            "stage_particles": self.stage_particles,
-            "stage_vignette": self.stage_vignette,
-            "stage_vignette_strength": self.stage_vignette_strength,
-            "stage_pulse_strength": self.stage_pulse_strength,
-            "stage_album_ambience": self.stage_album_ambience,
-            "stage_show_kda": self.stage_show_kda,
-            "stage_switch_anim": self.stage_switch_anim,
-            "stage_idle_showcase": self.stage_idle_showcase,
-            "stage_peak_caps": self.stage_peak_caps,
-            "show_now_playing": self.show_now_playing,
-            "web_overlay_enabled": self.web_overlay_enabled,
-            "web_overlay_port": self.web_overlay_port,
-            "setup_complete": self.setup_complete,
-            "hero_source": self.hero_source,
-            "gep_bridge_cmd": self.gep_bridge_cmd,
-            "gep_debug": self.gep_debug,
-            "gep_packages_url": self.gep_packages_url,
-            "native_port": self.native_port,
-            "roster_purged": self.roster_purged,
-        }
+    def _import_legacy(self) -> None:
+        """One-time import from a pre-0.6 config: Spotify credentials plus any
+        per-hero customisations (playlists, colours, backgrounds)."""
+        legacy = os.path.join(paths.data_dir(), LEGACY_CONFIG)
+        if not os.path.exists(legacy):
+            return
+        try:
+            with open(legacy, "r", encoding="utf-8") as fh:
+                old = json.load(fh)
+        except Exception:
+            return
+        sp = old.get("spotify", {})
+        if sp.get("client_id"):
+            self.spotify.client_id = sp.get("client_id", "")
+            self.spotify.client_secret = sp.get("client_secret", "")
+            self.spotify.redirect_uri = sp.get(
+                "redirect_uri", self.spotify.redirect_uri)
+            self.spotify.device_name = sp.get("device_name", "")
+        for name, h in old.get("heroes", {}).items():
+            hero = self.heroes.setdefault(self.canonical(name), Hero())
+            if h.get("playlist_uri"):
+                hero.playlist = h["playlist_uri"]
+            for field_name, old_key in (("color_main", "color_main"),
+                                        ("color_accent", "color_accent")):
+                if h.get(old_key):
+                    setattr(hero, field_name, h[old_key])
+            # Backgrounds lived in a different folder pre-0.6; migrate the file.
+            bg = h.get("background", "")
+            if bg:
+                src = os.path.join(paths.data_dir(), "backgrounds", bg)
+                dst = os.path.join(paths.art_dir("background"), bg)
+                if os.path.exists(src) and not os.path.exists(dst):
+                    try:
+                        shutil.copyfile(src, dst)
+                    except OSError:
+                        continue
+                if os.path.exists(dst):
+                    hero.background = bg

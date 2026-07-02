@@ -1,20 +1,11 @@
 name: Build Windows EXE
 
-# Builds a standalone, self-contained RivalsRadio bundle on a Windows runner so
-# you can just download a zip and run it — no local Python, Node, or terminal.
+# Builds the standalone RivalsRadio bundle:
+#   RivalsRadio.exe   the app (PyInstaller, assets + default roster included)
+#   overwolf-app/     the native Overwolf companion (load unpacked in Overwolf)
 #
-# The zip contains:
-#   RivalsRadio.exe              <- the app (Python / PyInstaller)
-#   overwolf-app/                <- the native Overwolf app (default hero source)
-#   bridge/RivalsRadioBridge.exe <- the ow-electron GEP bridge (optional), if built
-#
-# Hero detection runs through the native Overwolf app by default (load-unpacked
-# in Overwolf). The ow-electron bridge is an optional alternative; its build is
-# best-effort and the app ships regardless. You can also switch heroes manually.
-#
-# - Runs on pushes to the dev branch and on version tags (v1.0.0, ...).
-# - Can also be triggered manually from the Actions tab (Run workflow).
-# - The zip is uploaded as a build artifact; tagged builds also create a Release.
+# Runs on pushes to the dev branch; a manual run with a release_version input
+# (e.g. v0.6.0) also publishes a GitHub Release.
 
 on:
   push:
@@ -25,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       release_version:
-        description: "Publish a Release with this tag/version (e.g. v0.1.0). Leave blank to just build."
+        description: "Publish a Release with this tag (e.g. v0.6.0). Blank = just build."
         required: false
         default: ""
 
@@ -42,45 +33,19 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Install Python dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
-      - name: Generate app icon (.ico from assets/icon.png)
-        run: python scripts/png_to_ico.py
-
       - name: Build RivalsRadio.exe
         run: pyinstaller --noconfirm RivalsRadio.spec
-
-      - name: Build Overwolf GEP bridge (best-effort)
-        id: bridge
-        continue-on-error: true
-        working-directory: bridge
-        run: |
-          npm install
-          npm run dist
 
       - name: Assemble bundle
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path bundle | Out-Null
           Copy-Item dist/RivalsRadio.exe bundle/
-          # The bridge is now an unpacked app folder (dir target), not a
-          # single-file portable exe, so Overwolf can provision its packages.
-          $bridgeDir = "bridge/dist/win-unpacked"
-          if (Test-Path "$bridgeDir/RivalsRadioBridge.exe") {
-            New-Item -ItemType Directory -Force -Path bundle/bridge | Out-Null
-            Copy-Item "$bridgeDir/*" bundle/bridge/ -Recurse
-            Write-Host "::notice::Overwolf ow-electron bridge (unpacked) bundled."
-          } else {
-            Write-Host "::warning::ow-electron bridge build not found; shipping with the native Overwolf app only."
-          }
-          # Include the native Overwolf app (load-unpacked path).
           Copy-Item overwolf-app bundle/overwolf-app -Recurse
           Compress-Archive -Path bundle/* -DestinationPath RivalsRadio-windows.zip -Force
 
@@ -90,7 +55,7 @@ jobs:
           name: RivalsRadio-windows
           path: RivalsRadio-windows.zip
 
-      - name: Publish release (tag push, or manual run with a version)
+      - name: Publish release
         if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_version != '')
         uses: softprops/action-gh-release@v2
         with:
@@ -99,13 +64,9 @@ jobs:
           files: RivalsRadio-windows.zip
           generate_release_notes: true
           body: |
-            **RivalsRadio for Windows** — self-contained download.
+            **RivalsRadio for Windows** — download `RivalsRadio-windows.zip`,
+            unzip keeping the folder intact, run `RivalsRadio.exe`.
 
-            1. Download `RivalsRadio-windows.zip` below.
-            2. Unzip it **keeping the folder intact**.
-            3. Double-click `RivalsRadio.exe`.
-
-            The zip bundles the app, the native Overwolf app (`overwolf-app/`,
-            the default hero source — load it unpacked in Overwolf) and the
-            optional ow-electron GEP bridge. You can also switch heroes manually
-            from the Status tab.
+            Ships with the full hero roster + art. For automatic hero
+            detection, load `overwolf-app/` unpacked in Overwolf (dev mode)
+            and launch it. Manual switching works without it.
