@@ -1,8 +1,11 @@
 {
   "name": "rivalsradio-bridge",
   "version": "0.1.0",
-  "description": "Overwolf ow-electron bridge that reports the current Marvel Rivals hero to RivalsRadio over stdout.",
-  "author": "RivalsRadio",
+  "description": "Overwolf ow-electron bridge that reports the current Marvel Rivals hero to RivalsRadio.",
+  "productName": "RivalsRadio",
+  "author": {
+    "name": "RivalsRadio"
+  },
   "license": "MIT",
   "main": "src/main.js",
   "scripts": {
@@ -28,7 +31,7 @@
     }
   },
   "devDependencies": {
-    "@overwolf/ow-electron": "31.7.12",
+    "@overwolf/ow-electron": "39.6.1",
     "@overwolf/ow-electron-builder": "latest"
   }
 }

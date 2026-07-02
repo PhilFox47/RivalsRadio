@@ -1,63 +1,95 @@
-# Getting Overwolf GEP working for RivalsRadio
+# Getting the ow-electron bridge working (whitelisting, UIDs, console)
 
-## TL;DR — why the bridge currently shows `gep v0.0.0`
+Status: the app proposal **is whitelisted** (confirmation email received), but the
+bridge still needs its runtime identity to match the whitelisted one before
+Overwolf's servers will serve the real GEP package. This document explains the
+whole mechanism and the exact steps left.
 
-ow-electron's `gep` and `overlay` packages only **provision** (download a real
-version) for apps whose **Overwolf developer account is whitelisted**. Until
-then, every package loads as an empty `v0.0.0` stub — which is exactly what our
-logs show, on every machine, even running Overwolf's own canonical setup.
+## How ow-electron whitelisting actually works
 
-This is **not** a code, packaging, version, admin, or game problem (all ruled
-out). And it is **not** a Marvel Rivals problem — Marvel Rivals (game id
-`24890`) is already on Overwolf's Electron-supported list. The only missing
-piece is **account/app whitelisting**.
+There are **no keys, no tokens, no downloads**. The entire mechanism is:
 
-So once the steps below are done, the existing bridge should work unchanged:
-the log should show `gep vX.Y.Z` (a real version) and `✅ Marvel Rivals
-detected`.
+1. Every ow-electron app has a **UID** — a hash derived from two fields of its
+   `package.json`: the top-level **`productName`** (falling back to `name` if
+   missing) and **`author.name`** (the `name` field *inside* the `author`
+   object).
+2. When Overwolf approves a proposal, they add that app's UID (derived from the
+   name/author **you wrote in the proposal form**) to a server-side allowlist.
+3. At runtime, ow-electron's package manager identifies itself by UID. If the
+   UID is allowlisted, the real `gep`/`overlay` packages download; if not, you
+   get the empty **v0.0.0 stub** packages (exactly the failure we saw).
 
-## What you need to do (requires your Overwolf account)
+So "getting whitelisted" changes nothing on your machine — it only matters that
+the bridge's `package.json` identity **exactly matches** (case, spacing) what
+was submitted in the proposal.
 
-1. **Create an Overwolf developer account** at https://dev.overwolf.com →
-   "Developer onboarding". Console: https://console.overwolf.com.
+You can compute the UID for any identity locally:
 
-2. **Phase 1 — submit the app idea** to the Overwolf DevRel team for approval.
-   Describe RivalsRadio (a hero-aware Spotify controller) and state that it uses
-   **ow-electron GEP for Marvel Rivals (game id 24890)**. DevRel approval is what
-   triggers the **account whitelisting** email.
+```bash
+npm i -D @overwolf/ow-cli
+npx ow client calc-uid -n "<productName>" -a "<author name>"
+```
 
-3. **Register the app identity.** ow-electron derives the GEP app UID from
-   `productName` + `author.name` in `bridge/package.json`. Current values:
-   - `productName`: `RivalsRadioBridge`
-   - `author`: `RivalsRadio`
-   - → **App UID:** `lpgiljdaoinadfgconkigikgigfolimbbifcpgjm`
-     (also printed in the bridge log as `app uid: …`, and shown in RivalsRadio's
-     Activity log).
-   Register the app with this exact identity. If you change `productName`/`author`,
-   the UID changes — keep them in sync with what you register.
+And the bridge logs its actual runtime UID on startup (`app uid: …` — from the
+`OVERWOLF_APP_UID` env var ow-electron sets).
 
-4. **DEV vs PROD package environment.** While your game/app is in Overwolf's DEV
-   stage, point the bridge at the QA package endpoint:
-   RivalsRadio → Settings → **GEP packages URL** =
-   `https://electronapi-qa.overwolf.com/packages`.
-   Once Overwolf moves you to PROD, clear that field (blank = PROD).
+## About console.overwolf.com ("Something went wrong")
 
-5. **Verify.** With the account whitelisted, run RivalsRadio **as administrator**
-   (Marvel Rivals runs elevated), turn on **Settings → Log raw GEP events**, hit
-   **Start monitoring**, and launch the game. In the Activity log you should see:
-   - `package ready: gep vX.Y.Z`  ← real version, not `v0.0.0`
-   - `✅ Marvel Rivals detected and ENABLED — game is running`
-   - then hero/match events.
+The Developers Console is **not self-service**. Per Overwolf's docs, your
+DevRel contact must first provision access for the **specific account you gave
+them** (typically a Google account). Logging in with any other account — even a
+valid Overwolf account — fails with exactly the generic "Something went wrong"
+error. It is not a browser problem.
 
-If `gep` still shows `v0.0.0` after whitelisting, send Overwolf DevRel the
-installer logs from `%Temp%\ow-electron` and the app UID above.
+→ **Reply to the whitelisting email** and ask them to:
+1. provision Developers Console access for your account (tell them which email
+   / Google account to use), and
+2. confirm the **exact app name and author name** they whitelisted (or the UID
+   itself), and
+3. confirm the whitelist covers **Marvel Rivals (game id 24890) GEP**.
 
-## Honest expectations
+That thread is your DevRel contact — it's the fastest (and basically only)
+path.
 
-- This depends on Overwolf approving/whitelisting the app; that's their process
-  and timeline, not something the code controls.
-- GEP data for Marvel Rivals is **NetEase-compliance-limited** (no enemy
-  damage/healing, etc.). RivalsRadio only needs the local player's selected hero
-  (and optionally KDA/match result), which are within the allowed feature set.
-- The app stays self-contained as a binary, but GEP still relies on the Overwolf
-  runtime being present on the machine.
+## The identity test loop (no console needed)
+
+You don't need the console to verify the whitelist works. The feedback loop is
+local:
+
+1. Edit `bridge/package.json`: set top-level `productName` and `author.name`
+   to a candidate identity (whatever you wrote in the proposal — app name and
+   your name/studio name).
+2. `npm install` (first time only), then `npm start` in `bridge/`.
+3. Watch the RivalsRadio activity log (or `gep-debug.log` with debug on):
+   - `package ready: gep v0.0.0` → **not** whitelisted under this identity.
+   - `package ready: gep v3.x.x` (any real version) → **match!** Done.
+
+Try the exact strings from your proposal first. Capitalisation and spacing
+matter — "RivalsRadio" ≠ "Rivals Radio".
+
+## Fixed in this repo (previous silent UID bugs)
+
+- `author` was a plain string (`"author": "RivalsRadio"`). ow-electron reads
+  **`author.name`**, so the author was effectively empty and the UID wrong.
+  It is now the object form.
+- `productName` only existed under `build` (electron-builder), which affects
+  the **packaged** exe but not `npm start` — so dev runs and packaged runs had
+  **different UIDs**. A top-level `productName` now makes them identical.
+- `@overwolf/ow-electron` was pinned to `31.7.12` (2024-era). Now `39.6.1`
+  (latest stable) — an ancient client against current package servers is
+  another possible stub cause.
+- The QA packages URL workaround is no longer needed; leave
+  "GEP packages URL" empty in RivalsRadio's settings (PROD).
+
+## Support channels
+
+- Reply directly to the whitelisting email (your DevRel contact).
+- Overwolf developers Discord — the ow-electron channel is where package/UID
+  issues get answered fastest.
+- https://support.overwolf.com for account-level issues.
+
+## Once it works
+
+Set RivalsRadio's detection source to `gep` (Status tab). The app launches the
+bridge automatically and reads heroes from it. The native Overwolf app remains
+the default and keeps working regardless.
