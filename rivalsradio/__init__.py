@@ -5,4 +5,4 @@ RivalsRadio switches Spotify to that hero's playlist and drives a GPU-rendered
 Stage view (audio visualizer) for a second screen.
 """
 
-__version__ = "0.6.5"
+__version__ = "0.6.0"

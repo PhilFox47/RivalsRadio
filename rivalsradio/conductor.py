@@ -85,7 +85,7 @@ class Conductor:
         if name not in self.cfg.heroes:
             self.cfg.heroes[name] = Hero()
             self.cfg.save()
-            self.on_log(f"New hero '{name}' added to the roster. Set a "
+            self.on_log(f"New hero '{name}' added to the roster — set a "
                         f"playlist for it in the Heroes tab.")
             self.on_roster_change()
         self.on_hero_ui(name)
@@ -105,7 +105,7 @@ class Conductor:
         def work() -> None:
             try:
                 self.spotify.play_playlist(playlist)
-                self.on_log(f"{name}: playlist started ({source}).")
+                self.on_log(f"▶ {name} — playlist started ({source}).")
             except Exception as exc:
                 self.on_log(f"{name}: playback failed: {exc}")
         threading.Thread(target=work, name="play", daemon=True).start()

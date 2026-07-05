@@ -84,7 +84,7 @@ class Spotify:
             raise ValueError("No playlist configured.")
         device = self._device_id()
         if device is None:
-            raise RuntimeError("No Spotify device found. Open Spotify and "
+            raise RuntimeError("No Spotify device found — open Spotify and "
                                "play anything once, then retry.")
         try:
             self._sp.shuffle(True, device_id=device)
