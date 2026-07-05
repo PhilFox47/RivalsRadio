@@ -212,7 +212,7 @@ class StageWindow:
         import pygame
         self.pg = pygame
         pygame.init()
-        pygame.display.set_caption("RivalsRadio — Stage")
+        pygame.display.set_caption("Rivals Radio Stage")
         self.screen = pygame.display.set_mode((980, 620), pygame.RESIZABLE)
         icon = paths.bundled("assets", "icon.png")
         if os.path.exists(icon):
@@ -607,7 +607,7 @@ class StageWindow:
 
         self._draw_bars(accent)
 
-        hint = self._text("double-click / F11 fullscreen · Esc exit",
+        hint = self._text("double-click / F11 fullscreen, Esc exit",
                           max(10, int(self.H * 0.013)), "#565b62", bold=False)
         self.screen.blit(hint, (self.W - hint.get_width() - 12,
                                 self.H - hint.get_height() - 6))
@@ -696,7 +696,7 @@ class StageWindow:
             self.pg.draw.rect(self.screen, (18, 21, 26), (x, y, art, art),
                               border_radius=max(4, int(art * 0.12)))
 
-        title = tr.title or "—"
+        title = tr.title or "Nothing playing"
         if title != self._last_title:
             self._last_title = title
             self._title_t = time.perf_counter()
