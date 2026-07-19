@@ -54,33 +54,61 @@ def readable_ink(hex_value: str) -> str:
 
 
 def _bucketize(path: str):
-    """Saturation-weighted colour buckets of an image; [] on any problem."""
+    """Saturation-weighted colour buckets of an image; [] on any problem.
+
+    NumPy-vectorised: the HSV conversion and hue bucketing run as a handful of
+    array ops over the 96x96 thumbnail instead of a per-pixel Python/colorsys
+    loop (~9k iterations per image). Same maths, ~100x cheaper, so extracting
+    the whole roster's palettes off the UI thread is cheap. float64 throughout
+    to match colorsys bit-for-bit at bucket boundaries.
+    """
     try:
         from PIL import Image
+        import numpy as np
         im = Image.open(path).convert("RGBA")
     except Exception:
         return []
     im.thumbnail((96, 96))
-    buckets: dict = {}
-    for r, g, b, a in im.getdata():
-        if a < 160:
-            continue
-        h, s, v = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
-        if v < 0.18 or s < 0.22:
-            continue                      # skip near-black / near-grey
-        key = int(h * 18)                 # 20°-wide hue buckets
-        w = (s ** 2) * v
-        e = buckets.get(key)
-        if e is None:
-            buckets[key] = [w, r * w, g * w, b * w]
-        else:
-            e[0] += w
-            e[1] += r * w
-            e[2] += g * w
-            e[3] += b * w
+    arr = np.asarray(im, dtype=np.float64)
+    if arr.ndim != 3 or arr.shape[2] != 4:
+        return []
+    px = arr.reshape(-1, 4)
+    r, g, b, a = px[:, 0], px[:, 1], px[:, 2], px[:, 3]
+
+    maxc = np.maximum(np.maximum(r, g), b)
+    minc = np.minimum(np.minimum(r, g), b)
+    rangec = maxc - minc
+    v = maxc / 255.0
+    s = np.where(maxc > 0.0, rangec / np.where(maxc > 0.0, maxc, 1.0), 0.0)
+
+    safe = np.where(rangec > 0.0, rangec, 1.0)     # grey pixels get filtered by s
+    rc = (maxc - r) / safe
+    gc = (maxc - g) / safe
+    bc = (maxc - b) / safe
+    h = np.where(r == maxc, bc - gc,
+                 np.where(g == maxc, 2.0 + rc - bc, 4.0 + gc - rc))
+    h = np.mod(h / 6.0, 1.0)
+
+    mask = (a >= 160) & (v >= 0.18) & (s >= 0.22)   # drop near-black / near-grey
+    if not mask.any():
+        return []
+
+    key = (h[mask] * 18).astype(np.int64)           # 20-degree hue buckets
+    w = (s[mask] ** 2) * v[mask]
+    rw, gw, bw = r[mask] * w, g[mask] * w, b[mask] * w
+
+    n = 18
+    tw = np.bincount(key, weights=w, minlength=n)
+    tr = np.bincount(key, weights=rw, minlength=n)
+    tg = np.bincount(key, weights=gw, minlength=n)
+    tb = np.bincount(key, weights=bw, minlength=n)
+
     out = []
-    for key, (w, rs, gs, bs) in buckets.items():
-        out.append((w, key, (rs / w, gs / w, bs / w)))
+    for k in range(n):
+        wk = tw[k]
+        if wk > 0.0:
+            out.append((float(wk), k,
+                        (tr[k] / wk, tg[k] / wk, tb[k] / wk)))
     out.sort(reverse=True)
     return out
 

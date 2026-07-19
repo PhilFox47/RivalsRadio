@@ -11,7 +11,7 @@ import os
 import queue
 import shutil
 import sys
-
+import threading
 import time
 import tkinter as tk
 from tkinter import colorchooser, filedialog, messagebox
@@ -91,7 +91,9 @@ class App:
         self.hero_var = tk.StringVar(value="—")
         self._game_running = False
         self._status_sig = None
-        self._thumbs: dict = {}
+        self._thumb_cache: dict = {}     # (name, px) -> CTkImage (warm cache)
+        self._logo_labels: dict = {}     # name -> logo label of the current render
+        self._render_gen = 0             # bumped per render; stale thumbs dropped
 
         self.nav: dict = {}
         self.pages: dict = {}
@@ -272,7 +274,6 @@ class App:
         self.playlist_vars: dict = {}
         self.color_vars: dict = {}
         self.art_buttons: dict = {}
-        self._row_imgs: list = []
         self._render_rows()
 
         foot = ctk.CTkFrame(page, fg_color="transparent")
@@ -291,12 +292,15 @@ class App:
                       command=self._save_playlists, **ACCENT_BTN).pack(side="right")
 
     def _render_rows(self) -> None:
+        self._render_gen += 1
+        gen = self._render_gen
         for child in self.rows.winfo_children():
             child.destroy()
         self.playlist_vars.clear()
         self.color_vars.clear()
         self.art_buttons.clear()
-        self._row_imgs = []
+        self._logo_labels = {}
+        pending: list = []
 
         if not self.cfg.heroes:
             ctk.CTkLabel(self.rows, font=self.f_body, text_color=MUTED,
@@ -308,9 +312,15 @@ class App:
             row = ctk.CTkFrame(self.rows, fg_color=CARD_HI, corner_radius=10)
             row.pack(fill="x", padx=6, pady=4)
 
-            thumb = self._logo_thumb(name, 26)
-            ctk.CTkLabel(row, image=thumb, text="" if thumb else "♫", width=30,
-                         text_color=FAINT).pack(side="left", padx=(10, 0), pady=8)
+            # Logo: use the warm cache for an instant paint, otherwise show a
+            # placeholder and let a worker decode + tint it off the UI thread.
+            cached = self._thumb_cache.get((name, 26))
+            lbl = ctk.CTkLabel(row, image=cached, text="" if cached else "♫",
+                               width=30, text_color=FAINT)
+            lbl.pack(side="left", padx=(10, 0), pady=8)
+            self._logo_labels[name] = lbl
+            if cached is None:
+                pending.append(name)
             ctk.CTkLabel(row, text=name, width=150, anchor="w", font=self.f_bold,
                          text_color=TEXT).pack(side="left", padx=(4, 6))
 
@@ -344,31 +354,57 @@ class App:
             if self.manual_var.get() not in names:
                 self.manual_var.set(names[0])
 
-    def _logo_thumb(self, name: str, px: int):
+        if pending:
+            threading.Thread(target=self._produce_thumbs,
+                             args=(gen, pending, 26),
+                             name="thumbs", daemon=True).start()
+
+    def _produce_thumbs(self, gen: int, names: list, px: int) -> None:
+        """Worker thread: decode + tint each logo (and extract its palette),
+        posting finished PIL images back to the UI thread. No Tk here."""
+        for name in names:
+            if gen != self._render_gen:
+                return                        # a newer render superseded us
+            made = self._thumb_pil(name, px)
+            if made is not None:
+                self._uiq.put(("thumb", (gen, name, px, made[0], made[1])))
+
+    def _thumb_pil(self, name: str, px: int):
+        """Heavy, Tk-free half of the thumbnail: returns (PIL image, size)."""
         hero = self.cfg.heroes.get(name)
         path = hero.art_path("logo") if hero else None
         if not path:
             return None
-        main, _ = self.conductor.effective_colors(name)
-        key = (path, main, px)
-        img = self._thumbs.get(key)
-        if img is None:
-            try:
-                from PIL import Image, ImageChops
-                im = Image.open(path).convert("RGBA")
-                r = px / max(im.width, im.height)
-                im = im.resize((max(1, int(im.width * r)),
-                                max(1, int(im.height * r))), Image.LANCZOS)
-                solid = Image.new("RGB", im.size, colors.hex_to_rgb(main))
-                tint = ImageChops.multiply(im.convert("RGB"), solid).convert("RGBA")
-                tint.putalpha(im.getchannel("A"))
-                img = ctk.CTkImage(light_image=tint, dark_image=tint, size=im.size)
-                self._thumbs[key] = img
-            except Exception:
-                return None
-        self._row_imgs.append(img)
-        return img
+        try:
+            from PIL import Image, ImageChops
+            main, _ = self.conductor.effective_colors(name)
+            im = Image.open(path).convert("RGBA")
+            r = px / max(im.width, im.height)
+            im = im.resize((max(1, int(im.width * r)),
+                            max(1, int(im.height * r))), Image.LANCZOS)
+            solid = Image.new("RGB", im.size, colors.hex_to_rgb(main))
+            tint = ImageChops.multiply(im.convert("RGB"), solid).convert("RGBA")
+            tint.putalpha(im.getchannel("A"))
+            return tint, im.size
+        except Exception:
+            return None
 
+    def _invalidate_thumb(self, name: str) -> None:
+        for key in [k for k in self._thumb_cache if k[0] == name]:
+            self._thumb_cache.pop(key, None)
+
+    def _apply_thumb(self, gen: int, name: str, px: int, pil_img, size) -> None:
+        """UI thread: wrap a finished PIL image and drop it into its row."""
+        if gen != self._render_gen:
+            return                            # row belongs to a superseded render
+        try:
+            img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=size)
+        except Exception:
+            return
+        self._thumb_cache[(name, px)] = img
+        lbl = self._logo_labels.get(name)
+        if lbl is not None and lbl.winfo_exists():
+            lbl.configure(image=img, text="")
     def _swatch(self, parent, name: str, kind: str):
         hero = self.cfg.heroes[name]
         value = hero.color_main if kind == "main" else hero.color_accent
@@ -396,6 +432,7 @@ class App:
             hero.color_accent = hexv.lower()
         self.cfg.save()
         self.conductor.invalidate_palette(name)
+        self._invalidate_thumb(name)
         self.conductor.refresh_current_visuals()
         self._render_rows()
 
@@ -444,6 +481,7 @@ class App:
                 setattr(hero, kind, fname)
                 self.cfg.save()
                 self.conductor.invalidate_palette(name)
+                self._invalidate_thumb(name)
                 self.conductor.refresh_current_visuals()
                 status.configure(text="✓", text_color=ACCENT)
 
@@ -451,6 +489,7 @@ class App:
                 setattr(hero, kind, "")
                 self.cfg.save()
                 self.conductor.invalidate_palette(name)
+                self._invalidate_thumb(name)
                 self.conductor.refresh_current_visuals()
                 status.configure(text="—", text_color=MUTED)
 
@@ -491,6 +530,7 @@ class App:
         if not messagebox.askyesno("Remove", f"Remove {name}?"):
             return
         hero = self.cfg.heroes.pop(name, None)
+        self._invalidate_thumb(name)
         if hero:
             for kind in ART_KINDS:
                 p = hero.art_path(kind)
@@ -679,6 +719,8 @@ class App:
                     self._status_sig = None
                 elif kind == "roster":
                     self._render_rows()
+                elif kind == "thumb":
+                    self._apply_thumb(*payload)
         except queue.Empty:
             pass
         self._refresh_status()
